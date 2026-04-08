@@ -81,6 +81,7 @@ class KernelBuilder:
         slots = []
 
         for hi, (op1, val1, op2, op3, val3) in enumerate(HASH_STAGES):
+            slots.append(("debug", ("compare", val_hash_addr, (round, i, "pre_hash_stage", hi))))
             slots.append(("alu", (op1, tmp1, val_hash_addr, self.scratch_const(val1))))
             slots.append(("alu", (op3, tmp2, val_hash_addr, self.scratch_const(val3))))
             slots.append(("alu", (op2, val_hash_addr, tmp1, tmp2)))
@@ -129,45 +130,32 @@ class KernelBuilder:
         body = []  # array of slots
 
         # Scalar scratch registers
-        tmp_idx = self.alloc_scratch("tmp_idx")
-        tmp_val = self.alloc_scratch("tmp_val")
+        # tmp_idx = self.alloc_scratch("tmp_idx")
+        # tmp_val = self.alloc_scratch("tmp_val")
         tmp_node_val = self.alloc_scratch("tmp_node_val")
 
-        n_tmp_addrs = 3
-        tmp_addrs = [self.alloc_scratch(f"tmp_addr{i}") for i in range(n_tmp_addrs)]
+        # n_tmp_addrs = 3
+        # tmp_addrs = [self.alloc_scratch(f"tmp_addr{i}") for i in range(n_tmp_addrs)]
+        tmp_addr = self.alloc_scratch("tmp_addr")
 
         # Load inputs and forest values into memory to avoid duplicate loads/stores
-        # forest_values = self.alloc_scratch("forest_values", length=n_nodes)
         inp_indices = self.alloc_scratch("inp_indices", length=batch_size)
         inp_values = self.alloc_scratch("inp_values", length=batch_size)
 
-        # use vload operations to load the input values into memory
-        # for o1 in range(0, batch_size, VLEN * 2):
-        #     slots = [("vload", inp_indices + o1, self.scratch["inp_indices_p"] + o1)]
-        #     if o1 + VLEN < batch_size:  # handle case where batch_size is not a multiple of VLEN
-        #         slots.append(("vload", inp_values + o1 + VLEN, self.scratch["inp_values_p"] + o1 + VLEN))
-        #     body.append(("load", slots))
-
         n_val_offsets = batch_size // VLEN
+        inp_val_offsets = [self.alloc_scratch(f"inp_val_offset{o1}") for o1 in range(0, batch_size, VLEN)]
 
-        # batch_size // VLEN ops, can probably be optimized farther
-        inp_val_offsets = [self.scratch_const(o1, f"inp_val_offset{o1}") for o1 in range(0, batch_size, VLEN)]
+        # initialize the offsets with the beginning of the input values
+        for i in range(0, n_val_offsets, SLOT_LIMITS["load"]):
+            slots = [("const", inp_val_offsets[j], j * VLEN) for j in range(i, min(i + SLOT_LIMITS["load"], n_val_offsets))]
+            body.append(("load", slots))
 
-        # add_slots = []
-        # for i in range(0, n_val_offsets):
-        #     add_slots.append(("+", inp_val_offsets[i], self.scratch["inp_values_p"]))
-        #     if len(add_slots) > SLOT_LIMITS["alu"]:
-        #         body.append(("alu", add_slots))
-        #         add_slots = []
-
-        # if len(add_slots) > 0:
-        #     body.append(("alu", add_slots))
-
+        # generate offsets in mem from which to vload input values
         for i in range(0, n_val_offsets, SLOT_LIMITS["alu"]):
             slots = [("+", inp_val_offsets[j], inp_val_offsets[j], self.scratch["inp_values_p"]) for j in range(i, min(i + SLOT_LIMITS["alu"], n_val_offsets))]
             body.append(("alu", slots))
 
-        for i in range(0, len(inp_val_offsets), 2):
+        for i in range(0, len(inp_val_offsets), SLOT_LIMITS["load"]):
             slots = [("vload", inp_values + i * VLEN, inp_val_offsets[i])]
             ni = i + 1
             if ni < len(inp_val_offsets):  # handle case where batch_size is not a multiple of VLEN
@@ -181,30 +169,11 @@ class KernelBuilder:
                 # i_const = self.scratch_const(i)
                 scratch_inp_idx = inp_indices + i
                 scratch_inp_val = inp_values + i
-
-                # in the first iteration, need to initialize the idx to the start of the tree
-                # if round == 0:
-                #     start_idx = self.scratch["inp_indices_p"]
-                # else:
-                #     start_idx = scratch_inp_idx
-
-                # Simple parallelism within input / round
-
-                # idx = mem[inp_indices_p + i], val = mem[inp_values_p + i]
-                # body.append(("alu", 
-                #              [("+", tmp_addrs[0], self.scratch["inp_indices_p"], i_const)
-                #               ,("+", tmp_addrs[1], self.scratch["inp_values_p"], i_const)]))
-                # body.append(("load", [("load", tmp_idx, tmp_addrs[0]), ("load", tmp_val, tmp_addrs[1])]))
                 body.append(("debug", [("compare", scratch_inp_idx, (round, i, "idx")), ("compare", scratch_inp_val, (round, i, "val"))]))
 
-                # # val = mem[inp_values_p + i]
-                # body.append(("alu", ("+", tmp_addr, self.scratch["inp_values_p"], i_const)))
-                # body.append(("load", ("load", tmp_val, tmp_addr)))
-                # body.append(("debug", ("compare", tmp_val, (round, i, "val"))))
-
                 # node_val = mem[forest_values_p + idx]
-                body.append(("alu", ("+", tmp_addrs[2], self.scratch["forest_values_p"], scratch_inp_idx)))
-                body.append(("load", ("load", tmp_node_val, tmp_addrs[2])))
+                body.append(("alu", ("+", tmp_addr, self.scratch["forest_values_p"], scratch_inp_idx)))
+                body.append(("load", ("load", tmp_node_val, tmp_addr)))
                 body.append(("debug", ("compare", tmp_node_val, (round, i, "node_val"))))
                 # val = myhash(val ^ node_val)
                 body.append(("alu", ("^", scratch_inp_val, scratch_inp_val, tmp_node_val)))
@@ -225,17 +194,11 @@ class KernelBuilder:
                 # body.append(("alu", ("%", tmp_idx, tmp_idx, self.scratch["n_nodes"])))
                 body.append(("debug", ("compare", scratch_inp_idx, (round, i, "wrapped_idx"))))
 
-                # mem[inp_indices_p + i] = idx
-                # body.append(("alu", ("+", tmp_addrs[0], self.scratch["inp_indices_p"], i_const)))
-                # body.append(("store", ("store", tmp_addrs[0], tmp_idx)))
-
-                # mem[inp_values_p + i] = val
-                # body.append(("alu", ("+", tmp_addrs[1], self.scratch["inp_values_p"], i_const)))
-                # body.append(("store", ("store", tmp_addrs[1], tmp_val)))
 
         # use vstore operations to write the inputs back to memory
-        for o1 in range(0, batch_size, VLEN):
-            body.append(("store", [("vstore", inp_indices + o1, self.scratch["inp_indices_p"] + o1), ("vstore", inp_values + o1, self.scratch["inp_values_p"] + o1)]))
+        for i in range(0, n_val_offsets , SLOT_LIMITS["store"]):
+            slots = [("vstore", inp_val_offsets[j], inp_values + j * VLEN) for j in range(i, min(i + SLOT_LIMITS["store"], n_val_offsets))]
+            body.append(("store", slots))
 
         print("Total scratch used: ", self.scratch_ptr)
         body_instrs = self.build(body)

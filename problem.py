@@ -526,6 +526,7 @@ def myhash_traced(a: int, trace: dict[Any, int], round: int, batch_i: int) -> in
         return x % (2**32)
 
     for i, (op1, val1, op2, op3, val3) in enumerate(HASH_STAGES):
+        trace[(round, batch_i, "pre_hash_stage", i)] = a
         a = r(fns[op2](r(fns[op1](a, val1)), r(fns[op3](a, val3))))
         trace[(round, batch_i, "hash_stage", i)] = a
 
