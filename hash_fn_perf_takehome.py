@@ -163,8 +163,7 @@ class KernelBuilder:
         Scalar implementation using only scalar ALU and load/store.
         """
         tmp1 = self.alloc_scratch("tmp1")
-        tmp2 = self.alloc_scratch("tmp2")
-        tmp3 = self.alloc_scratch("tmp3")
+
         # Scratch space addresses
         init_vars = [
             "rounds",
@@ -195,21 +194,12 @@ class KernelBuilder:
 
         body = []  # array of slots
 
-        # Scalar scratch registers
-        # tmp_idx = self.alloc_scratch("tmp_idx")
-        # tmp_val = self.alloc_scratch("tmp_val")
-        tmp_node_val = self.alloc_scratch("tmp_node_val")
-
-        # n_tmp_addrs = 3
-        # tmp_addrs = [self.alloc_scratch(f"tmp_addr{i}") for i in range(n_tmp_addrs)]
-        tmp_addr = self.alloc_scratch("tmp_addr")
-
         # Load inputs and forest values into memory to avoid duplicate loads/stores
         inp_indices = self.alloc_scratch("inp_indices", length=batch_size)
         inp_values = self.alloc_scratch("inp_values", length=batch_size)
 
-        n_val_offsets = batch_size // VLEN
         inp_val_offsets = [self.alloc_scratch(f"inp_val_offset{o1}") for o1 in range(0, batch_size, VLEN)]
+        n_val_offsets = len(inp_val_offsets)
 
         # initialize the offsets with the beginning of the input values
         for i in range(0, n_val_offsets, SLOT_LIMITS["load"]):
@@ -251,7 +241,6 @@ class KernelBuilder:
             for st in range(0, batch_size, parallel_vals):
 
                 end = min(st + parallel_vals, batch_size)
-                l = end - st
 
                 scratch_inp_idx = inp_indices + st
                 scratch_inp_val = inp_values + st
@@ -290,23 +279,6 @@ class KernelBuilder:
                 slots = [("vbroadcast", fixed1_parallel, one_const) , ("vbroadcast", fixed2_parallel, two_const), ("vbroadcast", fixed3_parallel, zero_const)]
                 body.append(("valu", slots)) # can pack more into all these..
 
-                # # tmp1 = val % 2
-                # for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
-                #     slots = [("%", tmp1_parallel + j, scratch_inp_val + j, fixed2_parallel) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
-                #     body.append(("valu", slots))
-
-                # # tmp1 = tmp1 + 1
-                # for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
-                #     slots = [("+", tmp1_parallel + j, tmp1_parallel + j, fixed1_parallel) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
-                #     body.append(("valu", slots))
-
-                # # val = (val * 2) + tmp1
-                # for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
-                #     slots = [("multiply_add", scratch_inp_idx + j, scratch_inp_idx + j, fixed2_parallel, tmp1_parallel + j) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
-                #     body.append(("valu", slots))
-
-                # body.append(("debug", [("compare", scratch_inp_idx + (i - st), (round, i, "next_idx")) for i in range(st, end)]))
-
                 # if at full depth, set idx to 0
                 if (round + 1) % (forest_height + 1) == 0:
                     body.extend(self.build_idx_wrap(scratch_inp_idx, end - st, fixed3_parallel))
@@ -314,40 +286,6 @@ class KernelBuilder:
                     body.extend(self.build_idx_next(scratch_inp_idx, scratch_inp_val, tmp1_parallel, end - st, fixed1_parallel, fixed2_parallel))
 
                 body.append(("debug", [("compare", scratch_inp_idx + (i - st), (round, i, "wrapped_idx")) for i in range(st, end)]))
-
-            for i in range(batch_size):
-
-                # i_const = self.scratch_const(i)
-                scratch_inp_idx = inp_indices + i
-                scratch_inp_val = inp_values + i
-                # body.append(("debug", [("compare", scratch_inp_idx, (round, i, "idx")), ("compare", scratch_inp_val, (round, i, "val"))]))
-
-                # node_val = mem[forest_values_p + idx]
-                # body.append(("alu", ("+", tmp_addr, self.scratch["forest_values_p"], scratch_inp_idx)))
-                # body.append(("load", ("load", tmp_node_val, tmp_addr)))
-                # body.append(("debug", ("compare", tmp_node_val, (round, i, "node_val"))))
-                # val = myhash(val ^ node_val)
-                # body.append(("alu", ("^", scratch_inp_val, scratch_inp_val, tmp_node_val)))
-                # body.extend(self.build_hash(scratch_inp_val, tmp1, tmp2, round, i))
-                # body.append(("debug", ("compare", scratch_inp_val, (round, i, "hashed_val"))))
-
-                # control-flow-less alg:
-                # tmp1 = val % 2
-                # tmp1 = tmp1 + 1
-                # inp = (inp * 2) + tmp1
-                # idx = 2*idx + (1 if val % 2 == 0 else 2)
-                # body.append(("alu", ("%", tmp1, scratch_inp_val, two_const)))
-                # # optimization: efficient select directly from val % 2
-                # body.append(("flow", ("select", tmp3, tmp1, two_const, one_const)))
-                # body.append(("alu", ("*", scratch_inp_idx, scratch_inp_idx, two_const)))
-                # body.append(("alu", ("+", scratch_inp_idx, scratch_inp_idx, tmp3)))
-                # body.append(("debug", ("compare", scratch_inp_idx, (round, i, "next_idx"))))
-                
-                # idx = 0 if idx >= n_nodes else idx
-                # body.append(("alu", ("<", tmp1, scratch_inp_idx, self.scratch["n_nodes"])))
-                # body.append(("flow", ("select", scratch_inp_idx, tmp1, scratch_inp_idx, zero_const)))
-                # body.append(("alu", ("%", tmp_idx, tmp_idx, self.scratch["n_nodes"])))
-                # body.append(("debug", ("compare", scratch_inp_idx, (round, i, "wrapped_idx"))))
 
 
         # use vstore operations to write the inputs back to memory

@@ -17,7 +17,7 @@ from frozen_problem import (
     N_CORES,
     VLEN,
 )
-from perf_takehome import KernelBuilder
+from problem import KernelBuilder
 
 
 @lru_cache(maxsize=None)
