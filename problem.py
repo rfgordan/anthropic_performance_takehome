@@ -562,7 +562,7 @@ def reference_kernel2(mem: list[int], trace: dict[Any, int] = {}):
             val = myhash_traced(val ^ node_val, trace, h, i)
             trace[(h, i, "hashed_val")] = val
             idx = 2 * idx + (1 if val % 2 == 0 else 2)
-            trace[(h, i, "next_idx")] = idx
+            # trace[(h, i, "next_idx")] = idx
             idx = 0 if idx >= n_nodes else idx
             trace[(h, i, "wrapped_idx")] = idx
             mem[inp_values_p + i] = val
