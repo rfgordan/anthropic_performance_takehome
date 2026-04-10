@@ -530,7 +530,7 @@ def myhash_traced(a: int, trace: dict[Any, int], round: int, batch_i: int) -> in
         a1 = r(fns[op1](a, val1))
         trace[(round, batch_i, "hash_stage1", i)] = a1
         a2 = r(fns[op3](a, val3))
-        trace[(round, batch_i, "hash_stage2", i)] = a2
+        # trace[(round, batch_i, "hash_stage2", i)] = a2
         a = r(fns[op2](a1, a2))
         trace[(round, batch_i, "hash_stage", i)] = a
 

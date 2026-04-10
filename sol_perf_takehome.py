@@ -83,6 +83,43 @@ class KernelBuilder:
     #     for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
     #     return ("valu", slots)
 
+    def build_hash_opt(self, val_hash_addrs, tmp1_parallel, tmp2_parallel, hash_consts_vlen, round, st, end):
+        instrs = []
+
+        for hi, (op1, _, op2, op3, _) in enumerate(HASH_STAGES):
+                
+            instrs.append(("debug", [("compare", val_hash_addrs + i, (round, st + i, "pre_hash_stage", hi)) for i in range(0, end - st)]))
+
+            val1_const_vlen, val3_const_vlen = hash_consts_vlen[hi]
+
+            # op1
+            for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
+                slots = [(op1, tmp1_parallel + j, val_hash_addrs + j, val1_const_vlen) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
+                instrs.append(("valu", slots))
+
+            instrs.append(("debug", [("compare", tmp1_parallel + i, (round, st + i, "hash_stage1", hi)) for i in range(0, end - st)]))
+
+            if op3 == "<<" and op2 == "+":
+                 for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
+                    slots = [("multiply_add", val_hash_addrs + j, val_hash_addrs + j, val3_const_vlen, tmp1_parallel + j) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
+                    instrs.append(("valu", slots))
+            else:
+                # op3
+                for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
+                    slots = [(op3, tmp2_parallel + j, val_hash_addrs + j, val3_const_vlen) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
+                    instrs.append(("valu", slots))
+
+                # instrs.append(("debug", [("compare", tmp2_parallel + i, (round, st + i, "hash_stage2", hi)) for i in range(0, end - st)]))
+
+                # op2
+                for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
+                    slots = [(op2, val_hash_addrs + j, tmp1_parallel + j, tmp2_parallel + j) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
+                    instrs.append(("valu", slots))
+
+            instrs.append(("debug", [("compare", val_hash_addrs + i, (round, st + i, "hash_stage", hi)) for i in range(0, end - st)]))
+
+        return instrs
+
     def build_hash_parallel(self, val_hash_addrs, tmp1_parallel, tmp2_parallel, fixed1_parallel, fixed2_parallel, round, st, end):
         instrs = []
 
@@ -154,7 +191,96 @@ class KernelBuilder:
             instrs.append(("valu", slots))
 
         return instrs
+    
+    def build_apply_node_val_root(self, inp_values, root_node_val_vlen, chunk_len):
+        instrs = []
 
+        for i in range(0, chunk_len, SLOT_LIMITS["valu"] * VLEN):
+            slots = [("^", inp_values + j, inp_values + j, root_node_val_vlen) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, chunk_len), VLEN)]
+            instrs.append(("valu", slots))
+
+        return instrs
+    
+    def build_apply_node_val_masked(self, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, consts_vlen, round, depth, chunk_len):
+        
+        instrs = []
+
+        # set node_vals to 0
+        if round > 0:
+            for i in range(0, chunk_len, SLOT_LIMITS["valu"] * VLEN):
+                slots = [("vbroadcast", node_vals + j, consts_vlen[0]) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, chunk_len), VLEN)]
+                instrs.append(("valu", slots))
+
+        # iterate over all possible tree nodes
+        for i in range(2**depth - 1, 2**(depth + 1) - 1):
+
+            # mask input indices vs constants
+            for j in range(0, chunk_len, SLOT_LIMITS["valu"] * VLEN):
+                slots = [("==", tmp1_parallel + k, inp_indices + k, consts_vlen[i]) for k in range(j, min(j + SLOT_LIMITS["valu"] * VLEN, chunk_len), VLEN)]
+                instrs.append(("valu", slots))
+
+            # mask input indices vs constants
+            for j in range(0, chunk_len, SLOT_LIMITS["valu"] * VLEN):
+                slots = [("multiply_add", node_vals + k, tmp1_parallel + k, tree_vals_vlen[i], node_vals + k) for k in range(j, min(j + SLOT_LIMITS["valu"] * VLEN, chunk_len), VLEN)]
+                instrs.append(("valu", slots))
+
+        for i in range(0, chunk_len, SLOT_LIMITS["valu"] * VLEN):
+            slots = [("^", inp_values + i, node_vals + i, inp_values + i) for i in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, chunk_len), VLEN)]
+            instrs.append(("valu", slots))
+
+        return instrs
+    
+    def build_apply_node_val_scratch(self, scratch_inp_idx, scratch_inp_val, scratch_node_val, round, st, end):
+        return []
+    
+    def build_apply_node_val_mem(self, inp_indices, inp_values, node_vals, forest_p_const_vlen, round, st, end):
+        instrs = []
+        
+        # broadcast forest location in mem
+        for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
+            slots = [("+", inp_indices + j, inp_indices + j, forest_p_const_vlen) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
+            instrs.append(("valu", slots))
+
+        # load node values in node_vals
+        for i in range(0, end - st, SLOT_LIMITS["load"]):
+            slots = [("load", node_vals + j, inp_indices + j) for j in range(i, min(i + SLOT_LIMITS["load"], end - st), )]
+            instrs.append(("load", slots))
+
+        # check node values indexed in mini (parallel) batch
+        instrs.append(("debug", [("compare", node_vals + i, (round, st + i, "node_val")) for i in range(0, end - st)]))
+
+        # perform XOR with node values in parallel
+        for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
+            slots = [("^", inp_values + j, inp_values + j, node_vals + j) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
+            instrs.append(("valu", slots))
+
+        # broadcast forest location in mem
+        for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
+            slots = [("-", inp_indices + j, inp_indices + j, forest_p_const_vlen) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
+            instrs.append(("valu", slots))
+
+        return instrs
+    
+    # after this call, should have vectors for first six indices / values
+    def build_load_tree_vals(self, tree_vals_vlen, consts_vlen):
+        instrs = []
+
+        for i in range(0, len(tree_vals_vlen), SLOT_LIMITS["alu"]):
+            instrs.append(("alu", [("+", tree_vals_vlen[j], self.scratch["forest_values_p"], consts_vlen[j]) for j in range(i, min(i + SLOT_LIMITS["alu"], len(tree_vals_vlen)))]))
+
+        for i, tree_val_vlen in enumerate(tree_vals_vlen):
+            slots = [("load", tree_val_vlen, tree_val_vlen) for _ in range(i, min(i + SLOT_LIMITS["load"], len(tree_vals_vlen)))]
+            instrs.append(("load", slots))
+
+        slots = []
+        for i, tree_val_vlen in enumerate(tree_vals_vlen):
+            slots.append(("vbroadcast", tree_val_vlen, tree_val_vlen))
+
+        for i in range(0, len(slots), SLOT_LIMITS["valu"]):
+            instrs.append(("valu", slots[i:min(i+SLOT_LIMITS["valu"], len(slots))]))
+
+        return instrs
+    
     def build_kernel(
         self, forest_height: int, n_nodes: int, batch_size: int, rounds: int
     ):
@@ -194,12 +320,30 @@ class KernelBuilder:
         one_const = self.scratch_const(1)
         two_const = self.scratch_const(2)
 
-        zero_const_vlen = self.alloc_scratch("zero_const_vlen", length=VLEN)
-        one_const_vlen = self.alloc_scratch("one_const_vlen", length=VLEN)
-        two_const_vlen = self.alloc_scratch("two_const_vlen", length=VLEN)
+        n_tree_preload_layers = 3
+        consts_vlen = [self.alloc_scratch(f"const_{val}_vlen", length=VLEN) for val in range(2**3 - 1)]
+        tree_vals_vlen = [self.alloc_scratch(f"tree_val_{i}_vlen", length=VLEN) for i in range(min(2**3 - 1, forest_height + 1))]
+
         forest_p_const_vlen = self.alloc_scratch("forest_p_const_vlen", length=VLEN)
-        slots = [("vbroadcast", zero_const_vlen, zero_const) , ("vbroadcast", one_const_vlen, one_const), ("vbroadcast", two_const_vlen, two_const), ("vbroadcast", forest_p_const_vlen, self.scratch["forest_values_p"])]
-        body.append(("valu", slots)) # can pack more into all these..
+        const_slots = [("vbroadcast", consts_vlen[0], zero_const) , ("vbroadcast", consts_vlen[1], one_const), ("vbroadcast", consts_vlen[2], two_const), ("vbroadcast", forest_p_const_vlen, self.scratch["forest_values_p"])]
+
+        hash_consts_vlen = []
+        for hi, (_, val1, op2, op3, val3) in enumerate(HASH_STAGES):
+            if op2 == "+" and op3 == "<<":
+                # if combining instructions, we need to make the constant 2 ^ val3
+                val3 = 2 ** val3
+            hash_const1_vlen = self.alloc_scratch(f"hash_const1_vlen_{hi}_{val1}", length=VLEN)
+            hash_const3_vlen = self.alloc_scratch(f"hash_const1_vlen_{hi}_{val3}", length=VLEN)
+            hash_consts_vlen.append((hash_const1_vlen, hash_const3_vlen))
+            const_slots.append(("vbroadcast", hash_const1_vlen, self.scratch_const(val1)))
+            const_slots.append(("vbroadcast", hash_const3_vlen, self.scratch_const(val3)))
+
+        for i in range(0, len(const_slots), SLOT_LIMITS["valu"]):
+            slots = const_slots[i:min(i+SLOT_LIMITS["valu"], len(const_slots))]
+            body.append(("valu", slots))
+
+        slots = [("+", consts_vlen[3], consts_vlen[1], consts_vlen[2]), ("*", consts_vlen[4], consts_vlen[2], consts_vlen[2]), ("multiply_add", consts_vlen[5], consts_vlen[2], consts_vlen[2], consts_vlen[1]), ("multiply_add", consts_vlen[6], consts_vlen[2], consts_vlen[2], consts_vlen[2])]
+        body.append(("valu", slots))
 
         # computation buffers
         parallel_vals = 48 
@@ -214,11 +358,8 @@ class KernelBuilder:
         tmp1_parallel = self.alloc_scratch("tmp1_parallel", length=parallel_vals)
         tmp2_parallel = self.alloc_scratch("tmp2_parallel", length=parallel_vals)
 
-        # scratch to support SIMD operations with constants
-        fixed1_parallel = self.alloc_scratch("fixed_val_parallel", length=VLEN)
-        fixed2_parallel = self.alloc_scratch("fixed_val_parallel", length=VLEN)
-        # fixed3_parallel = self.alloc_scratch("fixed_val_parallel", length=VLEN)
-        # tmp3_parallel = self.alloc_scratch("tmp3_parallel", length=parallel_vals)
+        n_layers_in_mem_forest = 0
+        body.extend(self.build_load_tree_vals(tree_vals_vlen, consts_vlen))
 
         # Load inputs and forest values into memory to avoid duplicate loads/stores
         inp_indices = self.alloc_scratch("inp_indices", length=parallel_vals)
@@ -243,7 +384,7 @@ class KernelBuilder:
             if ci > 0:
                 # if not the first chunk, reset index values
                 for i in range(0, parallel_vals, SLOT_LIMITS["valu"] * VLEN):
-                    slots = [("vbroadcast", inp_indices + j, zero_const_vlen) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, parallel_vals), VLEN)]
+                    slots = [("vbroadcast", inp_indices + j, consts_vlen[0]) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, parallel_vals), VLEN)]
                     body.append(("valu", slots))
 
                 # increment offsets by parallel_vals for next chunk
@@ -262,49 +403,34 @@ class KernelBuilder:
 
             # use vbroadcast to 
             for round in range(rounds):
-
-                # on first round can potentially just broadcast root node value
+                depth = round % (forest_height + 1)
 
                 # check input indices / values indexed in full batch
                 body.append(("debug", [("compare", inp_indices + i, (round, st + i, "idx")) for i in range(0,end - st)]))
                 body.append(("debug", [("compare", inp_values + i, (round, st + i, "val")) for i in range(0,end - st)]))
 
-                # broadcast forest location in mem
-                for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
-                    slots = [("+", inp_indices + j, inp_indices + j, forest_p_const_vlen) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
-                    body.append(("valu", slots))
+                if depth == 0:
+                    body.extend(self.build_apply_node_val_root(inp_values, tree_vals_vlen[0], chunk_len))
+                elif depth < n_tree_preload_layers:
+                    body.extend(self.build_apply_node_val_masked(inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, consts_vlen, round, depth, chunk_len))
+                elif round < n_layers_in_mem_forest:
+                    body.extend(self.build_apply_node_val_scratch(inp_indices, inp_values, node_vals, tmp1_parallel, round, st, end))
+                else:
+                    body.extend(self.build_apply_node_val_mem(inp_indices, inp_values, node_vals, forest_p_const_vlen, round, st, end))
 
-                # load node values in node_vals
-                for i in range(0, end - st, SLOT_LIMITS["load"]):
-                    slots = [("load", node_vals + j, inp_indices + j) for j in range(i, min(i + SLOT_LIMITS["load"], end - st), )]
-                    body.append(("load", slots))
-
-                # broadcast forest location in mem
-                for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
-                    slots = [("-", inp_indices + j, inp_indices + j, forest_p_const_vlen) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
-                    body.append(("valu", slots))
-
-
-                # check node values indexed in mini (parallel) batch
-                body.append(("debug", [("compare", node_vals + i, (round, st + i, "node_val")) for i in range(0, end - st)]))
-
-                # perform XOR with node values in parallel
-                for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
-                    slots = [("^", inp_values + j, inp_values + j, node_vals + j) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
-                    body.append(("valu", slots))
-
-                body.extend(self.build_hash_parallel(inp_values, tmp1_parallel, tmp2_parallel, fixed1_parallel, fixed2_parallel, round, st, end))
+                body.extend(self.build_hash_opt(inp_values, tmp1_parallel, tmp2_parallel, hash_consts_vlen, round, st, end))
                 body.append(("debug", [("compare", inp_values + i, (round, st + i, "hashed_val")) for i in range(0, end - st)]))
 
-                # idx = 2*idx + (1 if val % 2 == 0 else 2)
+                
                 # slots = [("vbroadcast", fixed1_parallel, one_const) , ("vbroadcast", fixed2_parallel, two_const), ("vbroadcast", fixed3_parallel, zero_const)]
                 # body.append(("valu", slots)) # can pack more into all these..
 
                 # if at full depth, set idx to 0
                 if (round + 1) % (forest_height + 1) == 0:
-                    body.extend(self.build_idx_wrap(inp_indices, end - st, zero_const_vlen))
+                    body.extend(self.build_idx_wrap(inp_indices, end - st, consts_vlen[0]))
+                # idx = 2*idx + (1 if val % 2 == 0 else 2)
                 else:
-                    body.extend(self.build_idx_next(inp_indices, inp_values, tmp1_parallel, end - st, one_const_vlen, two_const_vlen))
+                    body.extend(self.build_idx_next(inp_indices, inp_values, tmp1_parallel, end - st, consts_vlen[1], consts_vlen[2]))
 
                 body.append(("debug", [("compare", inp_indices + i, (round, st + i, "wrapped_idx")) for i in range(0, end - st)]))
 
