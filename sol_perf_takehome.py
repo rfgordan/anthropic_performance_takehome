@@ -88,7 +88,7 @@ class KernelBuilder:
 
         for hi, (op1, val1, op2, op3, val3) in enumerate(HASH_STAGES):
                 
-            instrs.append(("debug", [("compare", val_hash_addrs + i, (round, i + st, "pre_hash_stage", hi)) for i in range(0, end - st)]))
+            instrs.append(("debug", [("compare", val_hash_addrs + i, (round, st + i, "pre_hash_stage", hi)) for i in range(0, end - st)]))
 
             slots = [("vbroadcast", fixed1_parallel, self.scratch_const(val1)), ("vbroadcast", fixed2_parallel, self.scratch_const(val3))]
             instrs.append(("valu", slots))
@@ -98,21 +98,21 @@ class KernelBuilder:
                 slots = [(op1, tmp1_parallel + j, val_hash_addrs + j, fixed1_parallel) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
                 instrs.append(("valu", slots))
 
-            instrs.append(("debug", [("compare", tmp1_parallel + i, (round, i + st, "hash_stage1", hi)) for i in range(0, end - st)]))
+            instrs.append(("debug", [("compare", tmp1_parallel + i, (round, st + i, "hash_stage1", hi)) for i in range(0, end - st)]))
 
             # op3
             for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
                 slots = [(op3, tmp2_parallel + j, val_hash_addrs + j, fixed2_parallel) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
                 instrs.append(("valu", slots))
 
-            instrs.append(("debug", [("compare", tmp2_parallel + i, (round, i + st, "hash_stage2", hi)) for i in range(0, end - st)]))
+            instrs.append(("debug", [("compare", tmp2_parallel + i, (round, st + i, "hash_stage2", hi)) for i in range(0, end - st)]))
 
             # op2
             for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
                 slots = [(op2, val_hash_addrs + j, tmp1_parallel + j, tmp2_parallel + j) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
                 instrs.append(("valu", slots))
 
-            instrs.append(("debug", [("compare", val_hash_addrs + i, (round, i + st, "hash_stage", hi)) for i in range(0, end - st)]))
+            instrs.append(("debug", [("compare", val_hash_addrs + i, (round, st + i, "hash_stage", hi)) for i in range(0, end - st)]))
 
         return instrs
     
@@ -180,10 +180,6 @@ class KernelBuilder:
             self.add("load", ("const", tmp1, i))
             self.add("load", ("load", self.scratch[v], tmp1))
 
-        zero_const = self.scratch_const(0)
-        one_const = self.scratch_const(1)
-        two_const = self.scratch_const(2)
-
         # Pause instructions are matched up with yield statements in the reference
         # kernel to let you debug at intermediate steps. The testing harness in this
         # file requires these match up to the reference kernel's yields, but the
@@ -194,104 +190,131 @@ class KernelBuilder:
 
         body = []  # array of slots
 
-        # Load inputs and forest values into memory to avoid duplicate loads/stores
-        inp_indices = self.alloc_scratch("inp_indices", length=batch_size)
-        inp_values = self.alloc_scratch("inp_values", length=batch_size)
+        zero_const = self.scratch_const(0)
+        one_const = self.scratch_const(1)
+        two_const = self.scratch_const(2)
 
-        inp_val_offsets = [self.alloc_scratch(f"inp_val_offset{o1}") for o1 in range(0, batch_size, VLEN)]
-        n_val_offsets = len(inp_val_offsets)
-
-        # initialize the offsets with the beginning of the input values
-        for i in range(0, n_val_offsets, SLOT_LIMITS["load"]):
-            slots = [("const", inp_val_offsets[j], j * VLEN) for j in range(i, min(i + SLOT_LIMITS["load"], n_val_offsets))]
-            body.append(("load", slots))
-
-        # generate offsets in mem from which to vload input values
-        for i in range(0, n_val_offsets, SLOT_LIMITS["alu"]):
-            slots = [("+", inp_val_offsets[j], inp_val_offsets[j], self.scratch["inp_values_p"]) for j in range(i, min(i + SLOT_LIMITS["alu"], n_val_offsets))]
-            body.append(("alu", slots))
-
-        for i in range(0, len(inp_val_offsets), SLOT_LIMITS["load"]):
-            slots = [("vload", inp_values + i * VLEN, inp_val_offsets[i])]
-            ni = i + 1
-            if ni < len(inp_val_offsets):  # handle case where batch_size is not a multiple of VLEN
-                slots.append(("vload", inp_values + ni * VLEN, inp_val_offsets[ni]))
-            body.append(("load", slots))
-
+        zero_const_vlen = self.alloc_scratch("zero_const_vlen", length=VLEN)
+        one_const_vlen = self.alloc_scratch("one_const_vlen", length=VLEN)
+        two_const_vlen = self.alloc_scratch("two_const_vlen", length=VLEN)
+        forest_p_const_vlen = self.alloc_scratch("forest_p_const_vlen", length=VLEN)
+        slots = [("vbroadcast", zero_const_vlen, zero_const) , ("vbroadcast", one_const_vlen, one_const), ("vbroadcast", two_const_vlen, two_const), ("vbroadcast", forest_p_const_vlen, self.scratch["forest_values_p"])]
+        body.append(("valu", slots)) # can pack more into all these..
 
         # computation buffers
         parallel_vals = 48 
         assert parallel_vals < SLOT_LIMITS["debug"] , "Parallel vals must be less than debug slot limit to avoid overflowing debug info"
+        chunk_incr = self.scratch_const(parallel_vals, "chunk_incr")
+
+        n_val_offsets = parallel_vals // VLEN # 6
+        inp_val_offsets = self.alloc_scratch("inp_val_offsets", length=n_val_offsets)
 
         node_vals = self.alloc_scratch("node_vals", length=parallel_vals)
-        tmp_addrs = self.alloc_scratch("tmp_addrs", length=parallel_vals)
+        # tmp_addrs = self.alloc_scratch("tmp_addrs", length=parallel_vals)
         tmp1_parallel = self.alloc_scratch("tmp1_parallel", length=parallel_vals)
         tmp2_parallel = self.alloc_scratch("tmp2_parallel", length=parallel_vals)
 
         # scratch to support SIMD operations with constants
         fixed1_parallel = self.alloc_scratch("fixed_val_parallel", length=VLEN)
         fixed2_parallel = self.alloc_scratch("fixed_val_parallel", length=VLEN)
-        fixed3_parallel = self.alloc_scratch("fixed_val_parallel", length=VLEN)
+        # fixed3_parallel = self.alloc_scratch("fixed_val_parallel", length=VLEN)
         # tmp3_parallel = self.alloc_scratch("tmp3_parallel", length=parallel_vals)
 
-        # use vbroadcast to 
-        for round in range(rounds):
+        # Load inputs and forest values into memory to avoid duplicate loads/stores
+        inp_indices = self.alloc_scratch("inp_indices", length=parallel_vals)
+        inp_values = self.alloc_scratch("inp_values", length=parallel_vals)
 
-            # parallel path: take parallel_vals chunks of batch size and process
-            for st in range(0, batch_size, parallel_vals):
+        # initialize the offsets with the beginning of the input values
+        for i in range(0, n_val_offsets, SLOT_LIMITS["load"]):
+            slots = [("const", inp_val_offsets + j, j * VLEN) for j in range(i, min(i + SLOT_LIMITS["load"], n_val_offsets))]
+            body.append(("load", slots))
 
-                end = min(st + parallel_vals, batch_size)
+        # generate offsets in mem from which to vload input values
+        for i in range(0, n_val_offsets, SLOT_LIMITS["alu"]):
+            slots = [("+", inp_val_offsets + j, inp_val_offsets + j, self.scratch["inp_values_p"]) for j in range(i, min(i + SLOT_LIMITS["alu"], n_val_offsets))]
+            body.append(("alu", slots))
 
-                scratch_inp_idx = inp_indices + st
-                scratch_inp_val = inp_values + st
+        # parallel path: take parallel_vals chunks of batch size and process
+        for ci, st in enumerate(range(0, batch_size, parallel_vals)):
+
+            end = min(st + parallel_vals, batch_size)
+            chunk_len = end - st
+
+            if ci > 0:
+                # if not the first chunk, reset index values
+                for i in range(0, parallel_vals, SLOT_LIMITS["valu"] * VLEN):
+                    slots = [("vbroadcast", inp_indices + j, zero_const_vlen) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, parallel_vals), VLEN)]
+                    body.append(("valu", slots))
+
+                # increment offsets by parallel_vals for next chunk
+                for i in range(0, n_val_offsets, SLOT_LIMITS["alu"]):
+                    slots = [("+", inp_val_offsets + j, inp_val_offsets + j, chunk_incr) for j in range(i, min(i + SLOT_LIMITS["alu"], n_val_offsets))]
+                    body.append(("alu", slots))
+
+            assert chunk_len % VLEN == 0, "If chunk length isn't a multiple of VLEN, vload could overrun inp_values"
+            n_val_offsets = min(n_val_offsets, chunk_len // VLEN + int(chunk_len % VLEN != 0))
+            for i in range(0, n_val_offsets, SLOT_LIMITS["load"]):
+                slots = [("vload", inp_values + i * VLEN, inp_val_offsets + i)]
+                ni = i + 1
+                if ni < n_val_offsets:  # handle case where batch_size is not a multiple of VLEN
+                    slots.append(("vload", inp_values + ni * VLEN, inp_val_offsets + ni))
+                body.append(("load", slots))
+
+            # use vbroadcast to 
+            for round in range(rounds):
+
+                # on first round can potentially just broadcast root node value
 
                 # check input indices / values indexed in full batch
-                body.append(("debug", [("compare", inp_indices + i, (round, i, "idx")) for i in range(st,end)]))
-                body.append(("debug", [("compare", inp_values + i, (round, i, "val")) for i in range(st,end)]))
+                body.append(("debug", [("compare", inp_indices + i, (round, st + i, "idx")) for i in range(0,end - st)]))
+                body.append(("debug", [("compare", inp_values + i, (round, st + i, "val")) for i in range(0,end - st)]))
 
                 # broadcast forest location in mem
                 for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
-                    slots = [("vbroadcast", tmp_addrs + j, self.scratch["forest_values_p"]) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
-                    body.append(("valu", slots))
-
-                # calculate node indices in tmp_addrs
-                for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
-                    slots = [("+", tmp_addrs + j, tmp_addrs + j, scratch_inp_idx + j) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
+                    slots = [("+", inp_indices + j, inp_indices + j, forest_p_const_vlen) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
                     body.append(("valu", slots))
 
                 # load node values in node_vals
                 for i in range(0, end - st, SLOT_LIMITS["load"]):
-                    slots = [("load", node_vals + j, tmp_addrs + j) for j in range(i, min(i + SLOT_LIMITS["load"], end - st), )]
+                    slots = [("load", node_vals + j, inp_indices + j) for j in range(i, min(i + SLOT_LIMITS["load"], end - st), )]
                     body.append(("load", slots))
 
+                # broadcast forest location in mem
+                for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
+                    slots = [("-", inp_indices + j, inp_indices + j, forest_p_const_vlen) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
+                    body.append(("valu", slots))
+
+
                 # check node values indexed in mini (parallel) batch
-                body.append(("debug", [("compare", node_vals + (i - st), (round, i, "node_val")) for i in range(st, end)]))
+                body.append(("debug", [("compare", node_vals + i, (round, st + i, "node_val")) for i in range(0, end - st)]))
 
                 # perform XOR with node values in parallel
                 for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
-                    slots = [("^", scratch_inp_val + j, scratch_inp_val + j, node_vals + j) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
+                    slots = [("^", inp_values + j, inp_values + j, node_vals + j) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
                     body.append(("valu", slots))
 
-                body.extend(self.build_hash_parallel(scratch_inp_val, tmp1_parallel, tmp2_parallel, fixed1_parallel, fixed2_parallel, round, st, end))
-                body.append(("debug", [("compare", scratch_inp_val + (i - st), (round, i, "hashed_val")) for i in range(st, end)]))
+                body.extend(self.build_hash_parallel(inp_values, tmp1_parallel, tmp2_parallel, fixed1_parallel, fixed2_parallel, round, st, end))
+                body.append(("debug", [("compare", inp_values + i, (round, st + i, "hashed_val")) for i in range(0, end - st)]))
 
                 # idx = 2*idx + (1 if val % 2 == 0 else 2)
-                slots = [("vbroadcast", fixed1_parallel, one_const) , ("vbroadcast", fixed2_parallel, two_const), ("vbroadcast", fixed3_parallel, zero_const)]
-                body.append(("valu", slots)) # can pack more into all these..
+                # slots = [("vbroadcast", fixed1_parallel, one_const) , ("vbroadcast", fixed2_parallel, two_const), ("vbroadcast", fixed3_parallel, zero_const)]
+                # body.append(("valu", slots)) # can pack more into all these..
 
                 # if at full depth, set idx to 0
                 if (round + 1) % (forest_height + 1) == 0:
-                    body.extend(self.build_idx_wrap(scratch_inp_idx, end - st, fixed3_parallel))
+                    body.extend(self.build_idx_wrap(inp_indices, end - st, zero_const_vlen))
                 else:
-                    body.extend(self.build_idx_next(scratch_inp_idx, scratch_inp_val, tmp1_parallel, end - st, fixed1_parallel, fixed2_parallel))
+                    body.extend(self.build_idx_next(inp_indices, inp_values, tmp1_parallel, end - st, one_const_vlen, two_const_vlen))
 
-                body.append(("debug", [("compare", scratch_inp_idx + (i - st), (round, i, "wrapped_idx")) for i in range(st, end)]))
+                body.append(("debug", [("compare", inp_indices + i, (round, st + i, "wrapped_idx")) for i in range(0, end - st)]))
 
 
-        # use vstore operations to write the inputs back to memory
-        for i in range(0, n_val_offsets , SLOT_LIMITS["store"]):
-            slots = [("vstore", inp_val_offsets[j], inp_values + j * VLEN) for j in range(i, min(i + SLOT_LIMITS["store"], n_val_offsets))]
-            body.append(("store", slots))
+                # on last round, can potentially skip index update
+
+            # use vstore operations to write the inputs back to memory
+            for i in range(0, min(n_val_offsets, chunk_len // VLEN), SLOT_LIMITS["store"]):
+                slots = [("vstore", inp_val_offsets + j, inp_values + j * VLEN) for j in range(i, min(i + SLOT_LIMITS["store"], n_val_offsets))]
+                body.append(("store", slots))
 
         print("Total scratch used: ", self.scratch_ptr, "remaining: ", SCRATCH_SIZE - self.scratch_ptr)
         body_instrs = self.build(body)
@@ -374,6 +397,10 @@ class Tests(unittest.TestCase):
     def test_kernel_print(self):
         # Full-scale example for performance testing
         do_kernel_test(10, 16, 256, trace=False, prints=True)
+
+    def test_kernel_print_awk_size(self):
+        # Full-scale example for performance testing
+        do_kernel_test(10, 16, 261, trace=False, prints=True)
 
     # Passing this test is not required for submission, see submission_tests.py for the actual correctness test
     # You can uncomment this if you think it might help you debug
