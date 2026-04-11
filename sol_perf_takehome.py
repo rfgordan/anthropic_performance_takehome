@@ -91,6 +91,12 @@ class KernelBuilder:
             instrs.append(("debug", [("compare", val_hash_addrs + i, (round, st + i, "pre_hash_stage", hi)) for i in range(0, end - st)]))
 
             val1_const_vlen, val3_const_vlen = hash_consts_vlen[hi]
+            if op3 == "<<" and op2 == "+" and op1 == "+":
+                for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
+                    slots = [("multiply_add", val_hash_addrs + j, val_hash_addrs + j, val3_const_vlen, val1_const_vlen) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
+                    instrs.append(("valu", slots))
+
+                continue
 
             # op1
             for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
@@ -219,7 +225,7 @@ class KernelBuilder:
                 slots = [("==", tmp1_parallel + k, inp_indices + k, consts_vlen[i]) for k in range(j, min(j + SLOT_LIMITS["valu"] * VLEN, chunk_len), VLEN)]
                 instrs.append(("valu", slots))
 
-            # mask input indices vs constants
+            # add node value if mask is true
             for j in range(0, chunk_len, SLOT_LIMITS["valu"] * VLEN):
                 slots = [("multiply_add", node_vals + k, tmp1_parallel + k, tree_vals_vlen[i], node_vals + k) for k in range(j, min(j + SLOT_LIMITS["valu"] * VLEN, chunk_len), VLEN)]
                 instrs.append(("valu", slots))
@@ -289,6 +295,9 @@ class KernelBuilder:
         Scalar implementation using only scalar ALU and load/store.
         """
         tmp1 = self.alloc_scratch("tmp1")
+        zero_const = self.scratch_const(0)
+        one_const = self.scratch_const(1)
+        two_const = self.scratch_const(2)
 
         # Scratch space addresses
         init_vars = [
@@ -316,10 +325,6 @@ class KernelBuilder:
 
         body = []  # array of slots
 
-        zero_const = self.scratch_const(0)
-        one_const = self.scratch_const(1)
-        two_const = self.scratch_const(2)
-
         n_tree_preload_layers = 3
         consts_vlen = [self.alloc_scratch(f"const_{val}_vlen", length=VLEN) for val in range(2**3 - 1)]
         tree_vals_vlen = [self.alloc_scratch(f"tree_val_{i}_vlen", length=VLEN) for i in range(min(2**3 - 1, forest_height + 1))]
@@ -331,9 +336,9 @@ class KernelBuilder:
         for hi, (_, val1, op2, op3, val3) in enumerate(HASH_STAGES):
             if op2 == "+" and op3 == "<<":
                 # if combining instructions, we need to make the constant 2 ^ val3
-                val3 = 2 ** val3
+                val3 = 2 ** val3 + 1
             hash_const1_vlen = self.alloc_scratch(f"hash_const1_vlen_{hi}_{val1}", length=VLEN)
-            hash_const3_vlen = self.alloc_scratch(f"hash_const1_vlen_{hi}_{val3}", length=VLEN)
+            hash_const3_vlen = self.alloc_scratch(f"hash_const3_vlen_{hi}_{val3}", length=VLEN)
             hash_consts_vlen.append((hash_const1_vlen, hash_const3_vlen))
             const_slots.append(("vbroadcast", hash_const1_vlen, self.scratch_const(val1)))
             const_slots.append(("vbroadcast", hash_const3_vlen, self.scratch_const(val3)))

@@ -463,6 +463,18 @@ def myhash(a: int) -> int:
 
     return a
 
+def kernel_1(t: Tree, inp: Input):
+    i = 0
+    print(f"Input: {bin(inp.values[i])}, {inp.values[i]}")
+    for h in range(inp.rounds):
+        idx = inp.indices[i]
+        val = inp.values[i]
+        val = myhash(val ^ t.values[idx])
+        print(f"Input: {bin(inp.values[i])}, {inp.values[i]}, Index: {inp.indices[i]}, round: {h}")
+        idx = 2 * idx + (1 if val % 2 == 0 else 2)
+        idx = 0 if idx >= len(t.values) else idx
+        inp.values[i] = val
+        inp.indices[i] = idx
 
 def reference_kernel(t: Tree, inp: Input):
     """
