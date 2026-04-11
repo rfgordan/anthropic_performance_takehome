@@ -105,22 +105,17 @@ class KernelBuilder:
 
             instrs.append(("debug", [("compare", tmp1_parallel + i, (round, st + i, "hash_stage1", hi)) for i in range(0, end - st)]))
 
-            if op3 == "<<" and op2 == "+":
-                 for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
-                    slots = [("multiply_add", val_hash_addrs + j, val_hash_addrs + j, val3_const_vlen, tmp1_parallel + j) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
-                    instrs.append(("valu", slots))
-            else:
-                # op3
-                for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
-                    slots = [(op3, tmp2_parallel + j, val_hash_addrs + j, val3_const_vlen) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
-                    instrs.append(("valu", slots))
+            # op3
+            for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
+                slots = [(op3, tmp2_parallel + j, val_hash_addrs + j, val3_const_vlen) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
+                instrs.append(("valu", slots))
 
-                # instrs.append(("debug", [("compare", tmp2_parallel + i, (round, st + i, "hash_stage2", hi)) for i in range(0, end - st)]))
+            # instrs.append(("debug", [("compare", tmp2_parallel + i, (round, st + i, "hash_stage2", hi)) for i in range(0, end - st)]))
 
-                # op2
-                for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
-                    slots = [(op2, val_hash_addrs + j, tmp1_parallel + j, tmp2_parallel + j) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
-                    instrs.append(("valu", slots))
+            # op2
+            for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
+                slots = [(op2, val_hash_addrs + j, tmp1_parallel + j, tmp2_parallel + j) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
+                instrs.append(("valu", slots))
 
             instrs.append(("debug", [("compare", val_hash_addrs + i, (round, st + i, "hash_stage", hi)) for i in range(0, end - st)]))
 
