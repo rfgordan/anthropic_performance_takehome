@@ -112,7 +112,8 @@ class KernelBuilder:
                 for i in range(0, end - st, VLEN):
                     slots = [("^", val_hash_addrs + i, tmp1_parallel + i, val_hash_addrs + i)]
                     idx = i // (VLEN)
-                    last_hash = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[idx])
+                    # last_hash = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[idx])
+                    last_hash = self.interleave_engine_fns(body, ("valu", slots))
                     after_hash_instr_idxs.append(last_hash)
             # merged multiply_add
             elif op3 == "<<" and op2 == "+" and op1 == "+":
