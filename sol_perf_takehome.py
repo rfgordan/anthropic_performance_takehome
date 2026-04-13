@@ -58,6 +58,75 @@ class KernelBuilder:
             else:
                 instrs.append({engine: [slot]})
         return instrs
+    
+    def get_memory_footprint(self, engine, slots):
+        mem_footprint = set()
+        for slot in slots:
+            match (engine, slot[0]):
+                case ("alu", _):
+                    _, dest, a1, a2 = slot
+                    mem_footprint.update([dest, a1, a2])
+                case ("valu", "vbroadcast"):
+                    _, dest, src = slot
+                    mem_footprint.update(src)
+                    mem_footprint.update(range(dest,dest+VLEN))
+                    break
+                case ("valu", "multiply_add"):
+                    _, dest, a, b, c = slot
+                    # mem_footprint.update(src)
+                    mem_footprint.update(range(dest,dest+VLEN))
+                    mem_footprint.update(range(a,a+VLEN))
+                    mem_footprint.update(range(a,a+VLEN))
+                    mem_footprint.update(range(a,a+VLEN))
+                    break
+                case ("valu", _):
+                    _, dest, a1, a2 = slot
+                    mem_footprint.update(range(dest,dest+VLEN))
+                    mem_footprint.update(range(a1,a1+VLEN))
+                    mem_footprint.update(range(a2,a2+VLEN))
+                case ("load", "load"):
+                    _, dest, addr = slot
+                    mem_footprint.add(dest)
+                case ("load", "const"):
+                    _, dest, addr = slot
+                    mem_footprint.add(dest)
+                case ("load", "vload"):
+                    _, dest, addr = slot
+                    mem_footprint.update(range(dest,dest+VLEN))
+                case ("load", "load_offset"):
+                    _, dest, addr, offset = slot
+                    mem_footprint.add(dest+offset)
+                case ("store", "store"):
+                    _, addr, src = slot
+                    mem_footprint.add(src)
+                case ("store", "vstore"):
+                    _, addr, src = slot
+                    mem_footprint.update(range(src,src+VLEN))
+                case _:
+                    print(f"No memory footprint calculation for {engine} - {slot[0]}")
+        return mem_footprint       
+
+    def build_multi_eng(self, slots: list[tuple[Engine, list | tuple]], vliw: bool = False):
+
+        instrs = []
+
+        # group slots by engine
+        slots_by_eng = defaultdict(list)
+        for i, (engine, slot) in enumerate(slots):
+            curr_instr = {engine: slot if isinstance(slot, list) else [slot]}
+            if isinstance(slot, list):
+                slots_by_eng[engine].append((i, slot))
+            else:
+                slots_by_eng[engine].append({i, [slot]})
+
+        # iteratively take slots with non-overlapping memory
+        consumed_slots = 0
+        curr_memory_footprint = set()
+        while consumed_slots < len(slots):
+            curr_instr = {}
+            while 
+
+        return instrs
 
     def add(self, engine, slot):
         self.instrs.append({engine: [slot]})
@@ -78,46 +147,57 @@ class KernelBuilder:
             self.const_map[val] = addr
         return self.const_map[val]
 
-    # def hash_op_parallel(self, op, dest, src1, src2, round, st, end):
-    #     slots = []
-    #     for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
-    #     return ("valu", slots)
-
     def build_hash_opt(self, val_hash_addrs, tmp1_parallel, tmp2_parallel, hash_consts_vlen, round, st, end):
         instrs = []
 
         for hi, (op1, _, op2, op3, _) in enumerate(HASH_STAGES):
                 
-            instrs.append(("debug", [("compare", val_hash_addrs + i, (round, st + i, "pre_hash_stage", hi)) for i in range(0, end - st)]))
+            if hi != 3:
+                instrs.append(("debug", [("compare", val_hash_addrs + i, (round, st + i, "pre_hash_stage", hi)) for i in range(0, end - st)]))
 
             val1_const_vlen, val3_const_vlen = hash_consts_vlen[hi]
-            if op3 == "<<" and op2 == "+" and op1 == "+":
+
+            # for stage 2, we do two multiply_adds, then xor in stage 3
+            if hi == 2:
+                next_val1_const_vlen, next_val3_const_vlen = hash_consts_vlen[hi+1]
+                for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
+                    slots = [("multiply_add", tmp1_parallel + j, val_hash_addrs + j, val3_const_vlen, val1_const_vlen) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
+                    instrs.append(("valu", slots))
+                for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
+                    slots = [("multiply_add", val_hash_addrs + j, val_hash_addrs + j, next_val3_const_vlen, next_val1_const_vlen) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
+                    instrs.append(("valu", slots))
+            elif hi == 3:
+                for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
+                    slots = [("^", val_hash_addrs + j, tmp1_parallel + j, val_hash_addrs + j) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
+                    instrs.append(("valu", slots))
+            # merged multiply_add
+            elif op3 == "<<" and op2 == "+" and op1 == "+":
                 for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
                     slots = [("multiply_add", val_hash_addrs + j, val_hash_addrs + j, val3_const_vlen, val1_const_vlen) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
                     instrs.append(("valu", slots))
+            # default path
+            else:
+                # op1
+                for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
+                    slots = [(op1, tmp1_parallel + j, val_hash_addrs + j, val1_const_vlen) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
+                    instrs.append(("valu", slots))
 
-                continue
+                # instrs.append(("debug", [("compare", tmp1_parallel + i, (round, st + i, "hash_stage1", hi)) for i in range(0, end - st)]))
 
-            # op1
-            for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
-                slots = [(op1, tmp1_parallel + j, val_hash_addrs + j, val1_const_vlen) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
-                instrs.append(("valu", slots))
+                # op3
+                for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
+                    slots = [(op3, tmp2_parallel + j, val_hash_addrs + j, val3_const_vlen) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
+                    instrs.append(("valu", slots))
 
-            instrs.append(("debug", [("compare", tmp1_parallel + i, (round, st + i, "hash_stage1", hi)) for i in range(0, end - st)]))
+                # instrs.append(("debug", [("compare", tmp2_parallel + i, (round, st + i, "hash_stage2", hi)) for i in range(0, end - st)]))
 
-            # op3
-            for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
-                slots = [(op3, tmp2_parallel + j, val_hash_addrs + j, val3_const_vlen) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
-                instrs.append(("valu", slots))
+                # op2
+                for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
+                    slots = [(op2, val_hash_addrs + j, tmp1_parallel + j, tmp2_parallel + j) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
+                    instrs.append(("valu", slots))
 
-            # instrs.append(("debug", [("compare", tmp2_parallel + i, (round, st + i, "hash_stage2", hi)) for i in range(0, end - st)]))
-
-            # op2
-            for i in range(0, end - st, SLOT_LIMITS["valu"] * VLEN):
-                slots = [(op2, val_hash_addrs + j, tmp1_parallel + j, tmp2_parallel + j) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, end - st), VLEN)]
-                instrs.append(("valu", slots))
-
-            instrs.append(("debug", [("compare", val_hash_addrs + i, (round, st + i, "hash_stage", hi)) for i in range(0, end - st)]))
+            if hi != 2:
+                instrs.append(("debug", [("compare", val_hash_addrs + i, (round, st + i, "hash_stage", hi)) for i in range(0, end - st)]))
 
         return instrs
 
@@ -320,9 +400,10 @@ class KernelBuilder:
 
         body = []  # array of slots
 
-        n_tree_preload_layers = 3
-        consts_vlen = [self.alloc_scratch(f"const_{val}_vlen", length=VLEN) for val in range(2**3 - 1)]
-        tree_vals_vlen = [self.alloc_scratch(f"tree_val_{i}_vlen", length=VLEN) for i in range(min(2**3 - 1, forest_height + 1))]
+        n_tree_preload_layers = 4
+        n_tree_preload_layers = min(n_tree_preload_layers, forest_height + 1) # can't preload more layers than the tree has
+        consts_vlen = [self.alloc_scratch(f"const_{val}_vlen", length=VLEN) for val in range(2**n_tree_preload_layers - 1)]
+        tree_vals_vlen = [self.alloc_scratch(f"tree_val_{i}_vlen", length=VLEN) for i in range(2**n_tree_preload_layers - 1)]
 
         forest_p_const_vlen = self.alloc_scratch("forest_p_const_vlen", length=VLEN)
         const_slots = [("vbroadcast", consts_vlen[0], zero_const) , ("vbroadcast", consts_vlen[1], one_const), ("vbroadcast", consts_vlen[2], two_const), ("vbroadcast", forest_p_const_vlen, self.scratch["forest_values_p"])]
@@ -332,6 +413,14 @@ class KernelBuilder:
             if op2 == "+" and op3 == "<<":
                 # if combining instructions, we need to make the constant 2 ^ val3
                 val3 = 2 ** val3 + 1
+            # special handling for stage 3: do two multiply_adds, then xor in stage 4
+            if hi == 2:
+                val1 += HASH_STAGES[3][1]
+            if hi == 3:
+                prev_val1 = HASH_STAGES[2][1]
+                prev_val3 = HASH_STAGES[2][4]
+                val1 = prev_val1 * (2 ** val3)
+                val3 = (2 ** prev_val3 + 1) * (2 ** val3)
             hash_const1_vlen = self.alloc_scratch(f"hash_const1_vlen_{hi}_{val1}", length=VLEN)
             hash_const3_vlen = self.alloc_scratch(f"hash_const3_vlen_{hi}_{val3}", length=VLEN)
             hash_consts_vlen.append((hash_const1_vlen, hash_const3_vlen))
@@ -344,6 +433,15 @@ class KernelBuilder:
 
         slots = [("+", consts_vlen[3], consts_vlen[1], consts_vlen[2]), ("*", consts_vlen[4], consts_vlen[2], consts_vlen[2]), ("multiply_add", consts_vlen[5], consts_vlen[2], consts_vlen[2], consts_vlen[1]), ("multiply_add", consts_vlen[6], consts_vlen[2], consts_vlen[2], consts_vlen[2])]
         body.append(("valu", slots))
+
+        if len(consts_vlen) > 7:
+            for i in range(7, len(consts_vlen)):
+                slots = [("const", consts_vlen[j], j) for j in range(i, min(i + SLOT_LIMITS["load"], len(consts_vlen)))]
+                body.append(("load", slots))
+
+            for i in range(7, len(consts_vlen), SLOT_LIMITS["valu"]):
+                slots = [("vbroadcast", consts_vlen[j], consts_vlen[j]) for j in range(i, min(i + SLOT_LIMITS["valu"], len(consts_vlen)))]
+                body.append(("valu", slots))
 
         # computation buffers
         parallel_vals = 48 
@@ -421,10 +519,6 @@ class KernelBuilder:
                 body.extend(self.build_hash_opt(inp_values, tmp1_parallel, tmp2_parallel, hash_consts_vlen, round, st, end))
                 body.append(("debug", [("compare", inp_values + i, (round, st + i, "hashed_val")) for i in range(0, end - st)]))
 
-                
-                # slots = [("vbroadcast", fixed1_parallel, one_const) , ("vbroadcast", fixed2_parallel, two_const), ("vbroadcast", fixed3_parallel, zero_const)]
-                # body.append(("valu", slots)) # can pack more into all these..
-
                 # if at full depth, set idx to 0
                 if (round + 1) % (forest_height + 1) == 0:
                     body.extend(self.build_idx_wrap(inp_indices, end - st, consts_vlen[0]))
@@ -433,7 +527,6 @@ class KernelBuilder:
                     body.extend(self.build_idx_next(inp_indices, inp_values, tmp1_parallel, end - st, consts_vlen[1], consts_vlen[2]))
 
                 body.append(("debug", [("compare", inp_indices + i, (round, st + i, "wrapped_idx")) for i in range(0, end - st)]))
-
 
                 # on last round, can potentially skip index update
 
