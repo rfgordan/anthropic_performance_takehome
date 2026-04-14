@@ -321,7 +321,8 @@ class KernelBuilder:
             last_loads.append(last_load)
 
         # check node values indexed in mini (parallel) batch
-        self.interleave_engine_fns(body, ("debug", [("compare", node_vals + i, (round, st + i, "node_val")) for i in range(0, end - st)]), last_loads[i])
+        for i in range(0, end - st):
+            self.interleave_engine_fns(body, ("debug", [("compare", node_vals + i, (round, st + i, "node_val"))]), last_loads[i])
 
         # perform XOR with node values in parallel
         for i in range(0, end - st, VLEN):
@@ -569,7 +570,7 @@ class KernelBuilder:
         
         # print(body)
         self.instrs.extend(body)
-        self.print_instructions()
+        # self.print_instructions()
         # Required to match with the yield in reference_kernel2
         self.instrs.append({"flow": [("pause",)]})
 
