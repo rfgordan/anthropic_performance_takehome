@@ -95,9 +95,9 @@ class KernelBuilder:
                 next_val1_const_vlen, next_val3_const_vlen = hash_consts_vlen[hi+1]
                 for i in range(0, end - st, VLEN):
                     slots = [("multiply_add", tmp1_parallel + i, val_hash_addrs + i, val3_const_vlen, val1_const_vlen)]
-                    idx = i // (VLEN)
+                    # idx = i // (VLEN)
                     # last_hash = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[idx])
-                    last_hash = self.interleave_engine_fns(body, ("valu", slots))
+                    last_hash = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
                     # after_hash_instr_idxs.append(last_hash)
 
                 # inp_val_instr_idxs = after_hash_instr_idxs
@@ -105,32 +105,32 @@ class KernelBuilder:
 
                 for i in range(0, end - st, VLEN):
                     slots = [("multiply_add", val_hash_addrs + i, val_hash_addrs + i, next_val3_const_vlen, next_val1_const_vlen)]
-                    idx = i // (VLEN)
+                    # idx = i // (VLEN)
                     # last_hash = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[idx])
-                    last_hash = self.interleave_engine_fns(body, ("valu", slots))
+                    last_hash = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
                     after_hash_instr_idxs.append(last_hash)
             elif hi == 3:
                 # print(inp_val_instr_idxs[idx])
                 for i in range(0, end - st, VLEN):
                     slots = [("^", val_hash_addrs + i, tmp1_parallel + i, val_hash_addrs + i)]
-                    idx = i // (VLEN)
+                    # idx = i // (VLEN)
                     # last_hash = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[idx])
-                    last_hash = self.interleave_engine_fns(body, ("valu", slots))
+                    last_hash = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
                     after_hash_instr_idxs.append(last_hash)
             # merged multiply_add
             elif op3 == "<<" and op2 == "+" and op1 == "+":
                 for i in range(0, end - st, VLEN):
                     slots = [("multiply_add", val_hash_addrs + i, val_hash_addrs + i, val3_const_vlen, val1_const_vlen)]
-                    idx = i // (VLEN)
-                    last_hash = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[idx])
+                    # idx = i // (VLEN)
+                    last_hash = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
                     after_hash_instr_idxs.append(last_hash)
             # default path
             else:
                 # op1
                 for i in range(0, end - st, VLEN):
                     slots = [(op1, tmp1_parallel + i, val_hash_addrs + i, val1_const_vlen)]
-                    idx = i // (VLEN)
-                    last_hash = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[idx])
+                    # idx = i // (VLEN)
+                    last_hash = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
                     after_hash_instr_idxs.append(last_hash)
 
                 # instrs.append(("debug", [("compare", tmp1_parallel + i, (round, st + i, "hash_stage1", hi)) for i in range(0, end - st)]))
@@ -141,8 +141,8 @@ class KernelBuilder:
                 # op3
                 for i in range(0, end - st, VLEN):
                     slots = [(op3, val_hash_addrs + i, val_hash_addrs + i, val3_const_vlen)]
-                    idx = i // (VLEN)
-                    last_hash = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[idx])
+                    # idx = i // (VLEN)
+                    last_hash = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
                     after_hash_instr_idxs.append(last_hash)
 
                 # instrs.append(("debug", [("compare", tmp2_parallel + i, (round, st + i, "hash_stage2", hi)) for i in range(0, end - st)]))
@@ -154,8 +154,8 @@ class KernelBuilder:
                 # op2
                 for i in range(0, end - st, VLEN):
                     slots = [(op2, val_hash_addrs + i, tmp1_parallel + i, val_hash_addrs + i)]
-                    idx = i // (VLEN)
-                    last_hash = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[idx])
+                    # idx = i // (VLEN)
+                    last_hash = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
                     after_hash_instr_idxs.append(last_hash)
 
             inp_val_instr_idxs = after_hash_instr_idxs
