@@ -243,57 +243,63 @@ class KernelBuilder:
 
         return inp_val_instr_idxs
     
-    def build_apply_node_val_root(self, body, inp_values, root_node_val_vlen, chunk_len):
+    def build_apply_node_val_root(self, body, inp_val_instr_idxs, inp_values, root_node_val_vlen, chunk_len):
 
-        inp_val_instr_idxs = []
-        curr_instr = len(body)
+        next_instr_idxs = []
 
         for i in range(0, chunk_len, VLEN):
             slots = [("^", inp_values + i, inp_values + i, root_node_val_vlen)]
-            last_xor = self.interleave_engine_fns(body, ("valu", slots))
-            inp_val_instr_idxs.append(last_xor)
+            last_xor = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
+            next_instr_idxs.append(last_xor)
 
         # return inp_val_instr_idxs, [curr_instr] * len(inp_val_instr_idxs)
-        return inp_val_instr_idxs
+        return next_instr_idxs
 
 
-    def build_apply_node_val_masked(self, body, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, consts_vlen, round, depth, chunk_len):
+    def build_apply_node_val_masked(self, body, inp_val_instr_idxs, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, consts_vlen, round, depth, chunk_len):
         
-        inp_val_instr_idxs = []
-        curr_len = len(body)
+        next_instr_idxs = [len(body)] * len(inp_val_instr_idxs)
 
         # set node_vals to 0
         if round > 0:
             for i in range(0, chunk_len, VLEN):
                 slots = [("vbroadcast", node_vals + i, consts_vlen[0])]
-                self.interleave_engine_fns(body, ("valu", slots))
+                self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
 
         # iterate over all possible tree nodes
         for i in range(2**depth - 1, 2**(depth + 1) - 1):
 
+            post_mask_instr_idxs = []
+
             # mask input indices vs constants
             for j in range(0, chunk_len, VLEN):
                 slots = [("==", tmp1_parallel + j, inp_indices + j, consts_vlen[i])]
-                self.interleave_engine_fns(body, ("valu", slots))
+                post_mask_instr_idx = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[j // VLEN])
+                post_mask_instr_idxs.append(post_mask_instr_idx)
 
             # add node value if mask is true
             for j in range(0, chunk_len, VLEN):
                 slots = [("multiply_add", node_vals + j, tmp1_parallel + j, tree_vals_vlen[i], node_vals + j)]
-                self.interleave_engine_fns(body, ("valu", slots))
+
+                # we want to depend on the final m_add
+                next_instr_idxs[j // VLEN] = self.interleave_engine_fns(body, ("valu", slots), post_mask_instr_idxs[j // VLEN])
+
+        inp_val_instr_idxs = next_instr_idxs
+        next_instr_idxs = []
 
         for i in range(0, chunk_len, VLEN):
             slots = [("^", inp_values + i, node_vals + i, inp_values + i)]
-            last_xor = self.interleave_engine_fns(body, ("valu", slots))
-            inp_val_instr_idxs.append(last_xor)
+            last_xor = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
+            next_instr_idxs.append(last_xor)
 
-        return inp_val_instr_idxs, [curr_len] * chunk_len
+        return next_instr_idxs
     
     def build_apply_node_val_scratch(self, body, scratch_inp_idx, scratch_inp_val, scratch_node_val, round, st, end):
         return []
     
-    def build_apply_node_val_mem(self, body, inp_indices, inp_values, node_vals, forest_p_const_vlen, round, st, end):
+    def build_apply_node_val_mem(self, body, inp_val_instr_idxs, inp_indices, inp_values, node_vals, forest_p_const_vlen, round, st, end):
         
-        curr_last_dep = len(body)
+        # curr_last_dep = len(body)
         last_loads = []
         last_broadcasts = []
 
@@ -304,7 +310,7 @@ class KernelBuilder:
 
         for i in range(0, end - st, VLEN):
             slots = [("+", inp_indices + i, inp_indices + i, forest_p_const_vlen)]
-            last_broadcast = self.interleave_engine_fns(body, ("valu", slots), curr_last_dep)
+            last_broadcast = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
             last_broadcasts.append(last_broadcast)
 
         # load node values in node_vals
@@ -317,20 +323,19 @@ class KernelBuilder:
         self.interleave_engine_fns(body, ("debug", [("compare", node_vals + i, (round, st + i, "node_val")) for i in range(0, end - st)]), last_loads[i])
 
         # perform XOR with node values in parallel
-        inp_val_instr_idxs = []
         for i in range(0, end - st, VLEN):
             slots = [("^", inp_values + i, inp_values + i, node_vals + i)]
-            last_xor = self.interleave_engine_fns(body, ("valu", slots), max(last_loads[i:i+VLEN]))
-            inp_val_instr_idxs.append(last_xor)
+            self.interleave_engine_fns(body, ("valu", slots), max(last_loads[i:i+VLEN]))
+            # inp_val_instr_idxs.append(last_xor)
 
         # broadcast forest location in mem
-        inp_idx_instr_idxs = []
+        inp_val_instr_idxs = []
         for i in range(0, end - st, VLEN):
             slots = [("-", inp_indices + i, inp_indices + i, forest_p_const_vlen)]
             last_minus = self.interleave_engine_fns(body, ("valu", slots), max(last_loads[i:i+VLEN]))
             inp_val_instr_idxs.append(last_minus)
 
-        return inp_val_instr_idxs, inp_idx_instr_idxs
+        return inp_val_instr_idxs
     
     # after this call, should have vectors for first six indices / values
     def build_load_tree_vals(self, body, tree_vals_vlen, consts_vlen):
@@ -515,22 +520,27 @@ class KernelBuilder:
                     slots.append(("vload", inp_values + ni * VLEN, inp_val_offsets + ni))
                 self.interleave_engine_fns(body, ("load", slots), curr_instr_len)
 
+            # larger than necessary
+            inp_val_instr_idxs = [len(body)] * parallel_vals
+
             # use vbroadcast to 
             for round in range(rounds):
                 depth = round % (forest_height + 1)
+                
+                # inp_val_instr_idxs in VLEN strided format
 
                 # check input indices / values indexed in full batch
-                self.interleave_engine_fns(body, ("debug", [("compare", inp_indices + i, (round, st + i, "idx")) for i in range(0,end - st)]))
-                self.interleave_engine_fns(body, ("debug", [("compare", inp_values + i, (round, st + i, "val")) for i in range(0,end - st)]))
+                self.interleave_engine_fns(body, ("debug", [("compare", inp_indices + i, (round, st + i, "idx")) for i in range(0,end - st)]), inp_val_instr_idxs[i // VLEN])
+                self.interleave_engine_fns(body, ("debug", [("compare", inp_values + i, (round, st + i, "val")) for i in range(0,end - st)]), inp_val_instr_idxs[i // VLEN])
 
-                inp_val_instr_idxs = []
-                inp_idx_instr_idxs = []
                 if depth == 0:
-                    inp_val_instr_idxs = self.build_apply_node_val_root(body, inp_values, tree_vals_vlen[0], chunk_len)
+                    inp_val_instr_idxs = self.build_apply_node_val_root(body, inp_val_instr_idxs, inp_values, tree_vals_vlen[0], chunk_len)
                 elif depth < n_tree_preload_layers:
-                    inp_val_instr_idxs, inp_idx_instr_idxs = self.build_apply_node_val_masked(body, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, consts_vlen, round, depth, chunk_len)
+                    print("Before: ", inp_val_instr_idxs)
+                    inp_val_instr_idxs = self.build_apply_node_val_masked(body, inp_val_instr_idxs, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, consts_vlen, round, depth, chunk_len)
+                    print("After: ", inp_val_instr_idxs)
                 else:
-                    inp_val_instr_idxs, inp_idx_instr_idxs = self.build_apply_node_val_mem(body, inp_indices, inp_values, node_vals, forest_p_const_vlen, round, st, end)
+                    inp_val_instr_idxs = self.build_apply_node_val_mem(body, inp_val_instr_idxs, inp_indices, inp_values, node_vals, forest_p_const_vlen, round, st, end)
 
                 inp_val_instr_idxs = self.build_hash_opt(body, inp_val_instr_idxs, inp_values, tmp1_parallel, hash_consts_vlen, round, st, end)
                 for i in range(0, end-st):
@@ -557,8 +567,13 @@ class KernelBuilder:
         
         # print(body)
         self.instrs.extend(body)
+        # self.print_instructions()
         # Required to match with the yield in reference_kernel2
         self.instrs.append({"flow": [("pause",)]})
+
+    def print_instructions(self):
+        for instr in self.instrs:
+            print(instr)
 
 BASELINE = 147734
 
@@ -631,6 +646,10 @@ class Tests(unittest.TestCase):
     def test_kernel_trace(self):
         # Full-scale example for performance testing
         do_kernel_test(10, 16, 256, trace=True, prints=False)
+
+    def test_kernel_trace_small(self):
+        # Full-scale example for performance testing
+        do_kernel_test(10, 3, 256, trace=True, prints=False)
 
     def test_kernel_print(self):
         # Full-scale example for performance testing
