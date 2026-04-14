@@ -320,14 +320,14 @@ class KernelBuilder:
         inp_val_instr_idxs = []
         for i in range(0, end - st, VLEN):
             slots = [("^", inp_values + i, inp_values + i, node_vals + i)]
-            last_xor = self.interleave_engine_fns(body, ("valu", slots), last_loads[i])
+            last_xor = self.interleave_engine_fns(body, ("valu", slots), max(last_loads[i:i+VLEN]))
             inp_val_instr_idxs.append(last_xor)
 
         # broadcast forest location in mem
         inp_idx_instr_idxs = []
         for i in range(0, end - st, VLEN):
             slots = [("-", inp_indices + i, inp_indices + i, forest_p_const_vlen)]
-            last_minus = self.interleave_engine_fns(body, ("valu", slots), last_loads[i])
+            last_minus = self.interleave_engine_fns(body, ("valu", slots), max(last_loads[i:i+VLEN]))
             inp_val_instr_idxs.append(last_minus)
 
         return inp_val_instr_idxs, inp_idx_instr_idxs
