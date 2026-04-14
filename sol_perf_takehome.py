@@ -463,7 +463,7 @@ class KernelBuilder:
                 self.interleave_engine_fns(body, ("valu", slots))
 
         # computation buffers
-        parallel_vals = 48 
+        parallel_vals = 64 
         assert parallel_vals < SLOT_LIMITS["debug"] , "Parallel vals must be less than debug slot limit to avoid overflowing debug info"
         chunk_incr = self.scratch_const(parallel_vals, "chunk_incr")
 
@@ -492,38 +492,40 @@ class KernelBuilder:
             slots = [("+", inp_val_offsets + j, inp_val_offsets + j, self.scratch["inp_values_p"]) for j in range(i, min(i + SLOT_LIMITS["alu"], n_val_offsets))]
             self.interleave_engine_fns(body, ("alu", slots))
 
+        # larger than necessary
+        inp_val_instr_idxs = [len(body)] * parallel_vals
+
         # parallel path: take parallel_vals chunks of batch size and process
         for ci, st in enumerate(range(0, batch_size, parallel_vals)):
 
             end = min(st + parallel_vals, batch_size)
             chunk_len = end - st
 
-            curr_instr_len = len(body)
-
+            next_instr_idxs = []
             if ci > 0:
                 # if not the first chunk, reset index values
-                for i in range(0, parallel_vals, SLOT_LIMITS["valu"] * VLEN):
-                    slots = [("vbroadcast", inp_indices + j, consts_vlen[0]) for j in range(i, min(i + SLOT_LIMITS["valu"] * VLEN, parallel_vals), VLEN)]
-                    self.interleave_engine_fns(body, ("valu", slots), curr_instr_len)
+                for i in range(0, parallel_vals, VLEN):
+                    slots = [("vbroadcast", inp_indices + i, consts_vlen[0])]
+                    next_instr_idx = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
+                    next_instr_idxs.append(next_instr_idx)
 
                 # increment offsets by parallel_vals for next chunk
-                for i in range(0, n_val_offsets, SLOT_LIMITS["alu"]):
-                    slots = [("+", inp_val_offsets + j, inp_val_offsets + j, chunk_incr) for j in range(i, min(i + SLOT_LIMITS["alu"], n_val_offsets))]
-                    self.interleave_engine_fns(body, ("alu", slots), curr_instr_len)
+                for i in range(0, n_val_offsets):
+                    slots = [("+", inp_val_offsets + i, inp_val_offsets + i, chunk_incr)]
+                    next_instr_idx = self.interleave_engine_fns(body, ("alu", slots), inp_val_instr_idxs[i])
+                    next_instr_idxs[i] = max(next_instr_idxs[i], next_instr_idx)
 
-            curr_instr_len = len(body)
+                inp_val_instr_idxs = next_instr_idxs
+                next_instr_idxs = []
 
             assert chunk_len % VLEN == 0, "If chunk length isn't a multiple of VLEN, vload could overrun inp_values"
             n_val_offsets = min(n_val_offsets, chunk_len // VLEN + int(chunk_len % VLEN != 0))
-            for i in range(0, n_val_offsets, SLOT_LIMITS["load"]):
+            for i in range(0, n_val_offsets):
                 slots = [("vload", inp_values + i * VLEN, inp_val_offsets + i)]
-                ni = i + 1
-                if ni < n_val_offsets:  # handle case where batch_size is not a multiple of VLEN
-                    slots.append(("vload", inp_values + ni * VLEN, inp_val_offsets + ni))
-                self.interleave_engine_fns(body, ("load", slots), curr_instr_len)
+                next_instr_idx = self.interleave_engine_fns(body, ("load", slots), inp_val_instr_idxs[i])
+                next_instr_idxs.append(next_instr_idx)
 
-            # larger than necessary
-            inp_val_instr_idxs = [len(body)] * parallel_vals
+            inp_val_instr_idxs = next_instr_idxs
 
             # use vbroadcast to 
             for round in range(rounds):
@@ -561,10 +563,14 @@ class KernelBuilder:
 
                 # on last round, can potentially skip index update
 
+            next_instr_idxs = []
             # use vstore operations to write the inputs back to memory
-            for i in range(0, min(n_val_offsets, chunk_len // VLEN), SLOT_LIMITS["store"]):
-                slots = [("vstore", inp_val_offsets + j, inp_values + j * VLEN) for j in range(i, min(i + SLOT_LIMITS["store"], n_val_offsets))]
-                self.interleave_engine_fns(body,("store", slots))
+            for i in range(0, min(n_val_offsets, chunk_len // VLEN)):
+                slots = [("vstore", inp_val_offsets + i, inp_values + i * VLEN)]
+                next_instr_idx = self.interleave_engine_fns(body,("store", slots), inp_val_instr_idxs[i])
+                next_instr_idxs.append(next_instr_idx)
+
+            inp_val_instr_idxs = next_instr_idxs
 
         print("Total scratch used: ", self.scratch_ptr, "remaining: ", SCRATCH_SIZE - self.scratch_ptr)
         
