@@ -51,7 +51,7 @@ SLOT_LIMITS = {
     "load": 2,
     "store": 2,
     "flow": 1,
-    "debug": 64,
+    "debug": 128,
 }
 
 VLEN = 8
