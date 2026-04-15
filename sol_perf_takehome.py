@@ -114,7 +114,7 @@ class KernelBuilder:
                 # op1
                 for i in range(0, end - st, VLEN):
                     slots = [(op1, tmp1_parallel + i, val_hash_addrs + i, val1_const_vlen)]
-                    inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
+                    self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
 
                 # instrs.append(("debug", [("compare", tmp1_parallel + i, (round, st + i, "hash_stage1", hi)) for i in range(0, end - st)]))
 
@@ -167,8 +167,6 @@ class KernelBuilder:
         for i in range(0, chunk_len, VLEN):
             slots = [("+", tmp1_parallel + i, tmp1_parallel + i, one_const_vlen)]
             inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
-
-        # print(inp_val_instr_idxs)
 
         # idx = (idx * 2) + tmp1
         for i in range(0, chunk_len, VLEN):
@@ -223,7 +221,7 @@ class KernelBuilder:
     
     def build_apply_node_val_mem(self, body, inp_val_instr_idxs, inp_indices, inp_values, node_vals, forest_p_const_vlen, round, st, end):
         
-        last_loads = []
+        last_loads = [len(body)] * len(inp_val_instr_idxs)
 
         for i in range(0, end - st, VLEN):
             slots = [("+", inp_indices + i, inp_indices + i, forest_p_const_vlen)]
@@ -232,22 +230,22 @@ class KernelBuilder:
         # load node values in node_vals
         for i in range(0, end - st):
             slots = [("load", node_vals + i, inp_indices + i)]
-            last_load = self.interleave_engine_fns(body, ("load", slots), inp_val_instr_idxs[i // VLEN])
-            last_loads.append(last_load)
+            last_loads[i // VLEN] = self.interleave_engine_fns(body, ("load", slots), inp_val_instr_idxs[i // VLEN])
+            # last_loads.append(last_load)
 
         # check node values indexed in mini (parallel) batch
         for i in range(0, end - st):
-            self.interleave_engine_fns(body, ("debug", [("compare", node_vals + i, (round, st + i, "node_val"))]), last_loads[i])
+            self.interleave_engine_fns(body, ("debug", [("compare", node_vals + i, (round, st + i, "node_val"))]), last_loads[i // VLEN])
 
         # perform XOR with node values in parallel
         for i in range(0, end - st, VLEN):
             slots = [("^", inp_values + i, inp_values + i, node_vals + i)]
-            self.interleave_engine_fns(body, ("valu", slots), max(last_loads[i:i+VLEN]))
+            self.interleave_engine_fns(body, ("valu", slots), last_loads[i // VLEN])
 
         # broadcast forest location in mem
         for i in range(0, end - st, VLEN):
             slots = [("-", inp_indices + i, inp_indices + i, forest_p_const_vlen)]
-            inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), max(last_loads[i:i+VLEN]))
+            inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), last_loads[i // VLEN])
 
         return inp_val_instr_idxs
     
@@ -282,7 +280,7 @@ class KernelBuilder:
                 return i + 1
 
             if engine in instr:
-                if len(instr[engine]) + len(slots) < SLOT_LIMITS[engine]:
+                if len(instr[engine]) + len(slots) <= SLOT_LIMITS[engine]:
                     instr[engine].extend(slots)
                     return i + 1
                 
@@ -440,22 +438,20 @@ class KernelBuilder:
             if ci > 0:
                 # if not the first chunk, reset index values
                 for i in range(0, parallel_vals, VLEN):
-                    slots = [("vbroadcast", inp_indices + i, consts_vlen[0])]
+                    slots = ("vbroadcast", inp_indices + i, consts_vlen[0])
                     next_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
 
                 # increment offsets by parallel_vals for next chunk
                 for i in range(0, n_val_offsets):
-                    slots = [("+", inp_val_offsets + i, inp_val_offsets + i, chunk_incr)]
+                    slots = ("+", inp_val_offsets + i, inp_val_offsets + i, chunk_incr)
                     next_instr_idx = self.interleave_engine_fns(body, ("alu", slots), inp_val_instr_idxs[i])
                     inp_val_instr_idxs[i] = max(next_instr_idxs[i], next_instr_idx)
 
             assert chunk_len % VLEN == 0, "If chunk length isn't a multiple of VLEN, vload could overrun inp_values"
-            n_val_offsets = min(n_val_offsets, chunk_len // VLEN + int(chunk_len % VLEN != 0))
-            for i in range(0, n_val_offsets):
-                slots = [("vload", inp_values + i * VLEN, inp_val_offsets + i)]
-                inp_val_instr_idxs[i] = self.interleave_engine_fns(body, ("load", slots), inp_val_instr_idxs[i])
+            for i in range(0, chunk_len, VLEN):
+                slots = [("vload", inp_values + i, inp_val_offsets + i // VLEN)]
+                inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("load", slots), inp_val_instr_idxs[i // VLEN])
 
-            # use vbroadcast to 
             for round in range(rounds):
                 depth = round % (forest_height + 1)
 
@@ -488,9 +484,9 @@ class KernelBuilder:
                 # on last round, can potentially skip index update
 
             # use vstore operations to write the inputs back to memory
-            for i in range(0, min(n_val_offsets, chunk_len // VLEN)):
-                slots = [("vstore", inp_val_offsets + i, inp_values + i * VLEN)]
-                inp_val_instr_idxs[i] = self.interleave_engine_fns(body,("store", slots), inp_val_instr_idxs[i])
+            for i in range(0, chunk_len, VLEN):
+                slots = [("vstore", inp_val_offsets + (i // VLEN), inp_values + i)]
+                inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("store", slots), inp_val_instr_idxs[i // VLEN])
 
         print("Total scratch used: ", self.scratch_ptr, "remaining: ", SCRATCH_SIZE - self.scratch_ptr)
         
