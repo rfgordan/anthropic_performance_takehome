@@ -367,6 +367,7 @@ class Machine:
                 if not self.enable_debug:
                     continue
                 for slot in slots:
+                    slots = slots[:-1]
                     if slot[0] == "compare":
                         loc, key = slot[1], slot[2]
                         ref = self.value_trace[key]
