@@ -316,7 +316,7 @@ class KernelBuilder:
         init_first_consts = [1,2]
         for c in init_first_consts:
             consts[c] = self.alloc_scratch(f"const_{c}")
-            next_instr = self.interleave_engine_fns(body, [("load", ("const", consts[c], c))], 0)
+            next_instr = self.interleave_engine_fns(body, ("load", ("const", consts[c], c)), 0)
         
         consts[3] = self.alloc_scratch("const_3")
         consts[4] = self.alloc_scratch("const_4")
@@ -327,7 +327,7 @@ class KernelBuilder:
         init_second_consts = [5,6]
         for c in init_second_consts:
             consts[c] = self.alloc_scratch(f"const_{c}")
-            after_second_consts_instr = self.interleave_engine_fns(body, [("load", ("const", consts[c], c))], next_instr)
+            after_second_consts_instr = self.interleave_engine_fns(body, ("load", ("const", consts[c], c)), next_instr)
 
         init_vlen_consts = [0,1,2]
         for c in init_vlen_consts:
@@ -354,7 +354,8 @@ class KernelBuilder:
             after_vlen_consts_init = self.interleave_engine_fns(body, slot, after_second_consts_instr)
 
         forest_p_const_vlen = self.alloc_scratch("forest_p_const_vlen", length=VLEN)
-        slot = ("valu", ("vbroadcast", forest_p_const_vlen, self.scratch["forest_p_const_vlen"]), after_init_vars_instr)
+        slot = ("valu", ("vbroadcast", forest_p_const_vlen, self.scratch["forest_values_p"]))
+        self.interleave_engine_fns(body, slot, after_init_vars_instr)
 
         hash_consts_vlen = []
         for hi, (_, val1, op2, op3, val3) in enumerate(HASH_STAGES):
@@ -439,7 +440,7 @@ class KernelBuilder:
         # self.interleave_engine_fns(body, ("valu", slots))
 
         if len(consts_vlen) > 7:
-            print("(!!!!) not optimized path")
+            print(f"(!!!!) not optimized path. number of const vectors: {len(consts_vlen)}")
             for i in range(7, len(consts_vlen)):
                 slots = [("const", consts_vlen[j], j) for j in range(i, min(i + SLOT_LIMITS["load"], len(consts_vlen)))]
                 self.interleave_engine_fns(body, ("load", slots))
