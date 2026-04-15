@@ -252,21 +252,22 @@ class KernelBuilder:
         return inp_val_instr_idxs
     
     # after this call, should have vectors for first six indices / values
-    def build_load_tree_vals(self, body, tree_vals_vlen, consts_vlen):
+    def build_load_tree_vals(self, body, after_init_vars_instr, tree_vals_vlen, consts_vlen):
 
-        for i in range(0, len(tree_vals_vlen), SLOT_LIMITS["alu"]):
-            self.interleave_engine_fns(body, ("alu", [("+", tree_vals_vlen[j], self.scratch["forest_values_p"], consts_vlen[j]) for j in range(i, min(i + SLOT_LIMITS["alu"], len(tree_vals_vlen)))]))
+        next_instr_idxs = [len(body)] * len(tree_vals_vlen)
+        for i in range(0, len(tree_vals_vlen)):
+            slot = ("+", tree_vals_vlen[i], self.scratch["forest_values_p"], consts_vlen[i])
+            next_instr_idxs[i] = self.interleave_engine_fns(body, ("alu", slot), after_init_vars_instr)
 
         for i, tree_val_vlen in enumerate(tree_vals_vlen):
-            slots = [("load", tree_val_vlen, tree_val_vlen) for _ in range(i, min(i + SLOT_LIMITS["load"], len(tree_vals_vlen)))]
-            self.interleave_engine_fns(body, ("load", slots))
+            slot = ("load", tree_val_vlen, tree_val_vlen)
+            next_instr_idxs[i] = self.interleave_engine_fns(body, ("load", slot), next_instr_idxs[i])
 
-        slots = []
         for i, tree_val_vlen in enumerate(tree_vals_vlen):
-            slots.append(("vbroadcast", tree_val_vlen, tree_val_vlen))
+            slot = ("vbroadcast", tree_val_vlen, tree_val_vlen)
+            next_instr_idxs[i] = self.interleave_engine_fns(body, ("valu", slot), next_instr_idxs[i])
 
-        for i in range(0, len(slots), SLOT_LIMITS["valu"]):
-            self.interleave_engine_fns(body, ("valu", slots[i:min(i+SLOT_LIMITS["valu"], len(slots))]))
+        return max(next_instr_idxs)
     
     @staticmethod
     def interleave_engine_fns(body, slots, first_possible=None):
@@ -301,13 +302,30 @@ class KernelBuilder:
         """
 
         # HYPERPARAMETERS
-        n_tree_preload_layers = 4
+        n_tree_preload_layers = 2
         parallel_vals = 256
+        n_val_offsets = parallel_vals // VLEN
         n_tree_preload_layers = min(n_tree_preload_layers, forest_height + 1) # can't preload more layers than the tree has
+
+        # IN-MEMORY HELPERS
         consts_vlen = [self.alloc_scratch(f"const_{val}_vlen", length=VLEN) for val in range(2**n_tree_preload_layers - 1)]
         tree_vals_vlen = [self.alloc_scratch(f"tree_val_{i}_vlen", length=VLEN) for i in range(2**n_tree_preload_layers - 1)]
+        inp_val_offsets = self.alloc_scratch("inp_val_offsets", length=n_val_offsets)
+        node_vals = self.alloc_scratch("node_vals", length=parallel_vals)
+        tmp1_parallel = self.alloc_scratch("tmp1_parallel", length=parallel_vals)
+        # Load inputs and forest values into memory to avoid duplicate loads/stores
+        inp_indices = self.alloc_scratch("inp_indices", length=parallel_vals)
+        inp_values = self.alloc_scratch("inp_values", length=parallel_vals)
 
         body = []  # array of instructions
+
+        # Pause instructions are matched up with yield statements in the reference
+        # kernel to let you debug at intermediate steps. The testing harness in this
+        # file requires these match up to the reference kernel's yields, but the
+        # submission harness ignores them.
+        self.add("flow", ("pause",))
+        # Any debug engine instruction is ignored by the submission simulator
+        self.add("debug", ("comment", "Starting loop"))
 
         # Optimized Loading for Constants [0, 1, 2, 4, 5, 6]
         consts = {0: self.alloc_scratch("const_0")}
@@ -344,14 +362,14 @@ class KernelBuilder:
             self.alloc_scratch(v)
             after_init_vars_instr = self.interleave_engine_fns(body, ("load", ("load", self.scratch[v], consts[c])), after_second_consts_instr)
 
-        consts[7] = self.alloc_scratch("const_7")
-        after_second_consts_instr = self.interleave_engine_fns(body, ("alu", ("+", consts[7], consts[1], consts[6])), after_second_consts_instr)
+        # consts[7] = self.alloc_scratch("const_7")
+        # after_second_consts_instr = self.interleave_engine_fns(body, ("alu", ("+", consts[7], consts[1], consts[6])), after_second_consts_instr)
 
-        after_vlen_consts_init = None
-        second_vlen_consts = [3,4,5,6,7]
-        for c in second_vlen_consts:
-            slot = ("valu", ("vbroadcast", consts_vlen[c], consts[c]))
-            after_vlen_consts_init = self.interleave_engine_fns(body, slot, after_second_consts_instr)
+        # after_vlen_consts_init = None
+        # second_vlen_consts = [3,4,5,6]
+        # for c in second_vlen_consts:
+        #     slot = ("valu", ("vbroadcast", consts_vlen[c], consts[c]))
+        #     after_vlen_consts_init = self.interleave_engine_fns(body, slot, after_second_consts_instr)
 
         forest_p_const_vlen = self.alloc_scratch("forest_p_const_vlen", length=VLEN)
         slot = ("valu", ("vbroadcast", forest_p_const_vlen, self.scratch["forest_values_p"]))
@@ -375,69 +393,11 @@ class KernelBuilder:
             hash_consts_vlen.append((hash_const1_vlen, hash_const3_vlen))
             val1_const = self.alloc_scratch(f"const_{hi}_{val1}")
             val3_const = self.alloc_scratch(f"const_{hi}_{val3}")
-            after_val1_instr = self.interleave_engine_fns(body, ("load", ("const", val1_const, val1)))
-            after_val3_instr = self.interleave_engine_fns(body, ("load", ("const", val3_const, val3)))
+            after_val1_instr = self.interleave_engine_fns(body, ("load", ("const", val1_const, val1)), 0)
+            after_val3_instr = self.interleave_engine_fns(body, ("load", ("const", val3_const, val3)), 0)
             self.interleave_engine_fns(body, ("valu", ("vbroadcast", hash_const1_vlen, val1_const)), after_val1_instr)
             self.interleave_engine_fns(body, ("valu", ("vbroadcast", hash_const3_vlen, val3_const)), after_val3_instr)
 
-        
-        
-
-        # Scratch space addresses
-        # init_vars = [
-        #     "rounds",
-        #     "n_nodes",
-        #     "batch_size",
-        #     "forest_height",
-        #     "forest_values_p",
-        #     "inp_indices_p",
-        #     "inp_values_p",
-        # ]
-
-        # only init the vars we're using
-
-        # for v in init_vars:
-        #     self.alloc_scratch(v, 1)
-        # for i, v in enumerate(init_vars):
-        #     self.add("load", ("const", tmp1, i))
-        #     self.add("load", ("load", self.scratch[v], tmp1))
-
-        # Pause instructions are matched up with yield statements in the reference
-        # kernel to let you debug at intermediate steps. The testing harness in this
-        # file requires these match up to the reference kernel's yields, but the
-        # submission harness ignores them.
-        self.add("flow", ("pause",))
-        # Any debug engine instruction is ignored by the submission simulator
-        self.add("debug", ("comment", "Starting loop"))
-
-        # forest_p_const_vlen = self.alloc_scratch("forest_p_const_vlen", length=VLEN)
-        # const_slots = [("vbroadcast", consts_vlen[0], zero_const) , ("vbroadcast", consts_vlen[1], one_const), ("vbroadcast", consts_vlen[2], two_const), ("vbroadcast", forest_p_const_vlen, self.scratch["forest_values_p"])]
-
-        # hash_consts_vlen = []
-        # for hi, (_, val1, op2, op3, val3) in enumerate(HASH_STAGES):
-        #     if op2 == "+" and op3 == "<<":
-        #         # if combining instructions, we need to make the constant 2 ^ val3
-        #         val3 = 2 ** val3 + 1
-        #     # special handling for stage 3: do two multiply_adds, then xor in stage 4
-        #     if hi == 2:
-        #         val1 += HASH_STAGES[3][1]
-        #     if hi == 3:
-        #         prev_val1 = HASH_STAGES[2][1]
-        #         prev_val3 = HASH_STAGES[2][4]
-        #         val1 = prev_val1 * (2 ** val3)
-        #         val3 = (2 ** prev_val3 + 1) * (2 ** val3)
-        #     hash_const1_vlen = self.alloc_scratch(f"hash_const1_vlen_{hi}_{val1}", length=VLEN)
-        #     hash_const3_vlen = self.alloc_scratch(f"hash_const3_vlen_{hi}_{val3}", length=VLEN)
-        #     hash_consts_vlen.append((hash_const1_vlen, hash_const3_vlen))
-        #     const_slots.append(("vbroadcast", hash_const1_vlen, self.scratch_const(val1)))
-        #     const_slots.append(("vbroadcast", hash_const3_vlen, self.scratch_const(val3)))
-
-        # for i in range(0, len(const_slots), SLOT_LIMITS["valu"]):
-        #     slots = const_slots[i:min(i+SLOT_LIMITS["valu"], len(const_slots))]
-        #     self.interleave_engine_fns(body, ("valu", slots))
-
-        # slots = [("+", consts_vlen[3], consts_vlen[1], consts_vlen[2]), ("*", consts_vlen[4], consts_vlen[2], consts_vlen[2]), ("multiply_add", consts_vlen[5], consts_vlen[2], consts_vlen[2], consts_vlen[1]), ("multiply_add", consts_vlen[6], consts_vlen[2], consts_vlen[2], consts_vlen[2])]
-        # self.interleave_engine_fns(body, ("valu", slots))
 
         if len(consts_vlen) > 7:
             print(f"(!!!!) not optimized path. number of const vectors: {len(consts_vlen)}")
@@ -450,31 +410,25 @@ class KernelBuilder:
                 self.interleave_engine_fns(body, ("valu", slots))
 
         # assert parallel_vals < SLOT_LIMITS["debug"] , "Parallel vals must be less than debug slot limit to avoid overflowing debug info"
-        chunk_incr = self.scratch_const(parallel_vals, "chunk_incr")
+        chunk_incr = self.alloc_scratch("chunk_incr")
+        self.interleave_engine_fns(body, ("load", ("const", chunk_incr, parallel_vals)), 0)
 
-        n_val_offsets = parallel_vals // VLEN # 6
-        inp_val_offsets = self.alloc_scratch("inp_val_offsets", length=n_val_offsets)
+        after_load_tree_vals_instr = self.build_load_tree_vals(body, after_init_vars_instr, tree_vals_vlen, consts_vlen)
 
-        node_vals = self.alloc_scratch("node_vals", length=parallel_vals)
-        tmp1_parallel = self.alloc_scratch("tmp1_parallel", length=parallel_vals)
-
-        self.build_load_tree_vals(body, tree_vals_vlen, consts_vlen)
-
-        # Load inputs and forest values into memory to avoid duplicate loads/stores
-        inp_indices = self.alloc_scratch("inp_indices", length=parallel_vals)
-        inp_values = self.alloc_scratch("inp_values", length=parallel_vals)
-
+        # can potentially optimize this using alus
         # initialize the offsets with the beginning of the input values
-        for i in range(0, n_val_offsets, SLOT_LIMITS["load"]):
-            slots = [("const", inp_val_offsets + j, j * VLEN) for j in range(i, min(i + SLOT_LIMITS["load"], n_val_offsets))]
-            self.interleave_engine_fns(body, ("load", slots))
+        after_init_offsets_instrs = [len(body)] * n_val_offsets
+        for i in range(0, n_val_offsets):
+            slot = ("const", inp_val_offsets + i, i * VLEN)
+            after_init_offsets_instrs[i] = self.interleave_engine_fns(body, ("load", slot), 0)
 
         # generate offsets in mem from which to vload input values
-        for i in range(0, n_val_offsets, SLOT_LIMITS["alu"]):
-            slots = [("+", inp_val_offsets + j, inp_val_offsets + j, self.scratch["inp_values_p"]) for j in range(i, min(i + SLOT_LIMITS["alu"], n_val_offsets))]
-            self.interleave_engine_fns(body, ("alu", slots))
+        for i in range(0, n_val_offsets):
+            slot = ("+", inp_val_offsets + i, inp_val_offsets + i, self.scratch["inp_values_p"])
+            after_init_offsets_instrs[i] = self.interleave_engine_fns(body, ("alu", slot), after_init_offsets_instrs[i])
 
-        inp_val_instr_idxs = [len(body)] * (parallel_vals // VLEN)
+        # inp_val_instr_idxs = [len(body)] * (parallel_vals // VLEN)
+        inp_val_instr_idxs = after_init_offsets_instrs
 
         # parallel path: take parallel_vals chunks of batch size and process
         for ci, st in enumerate(range(0, batch_size, parallel_vals)):
