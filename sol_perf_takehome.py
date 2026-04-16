@@ -60,6 +60,7 @@ class KernelBuilder:
         return instrs
 
     def add(self, engine, slot):
+        slot = (*slot, {})
         self.instrs.append({engine: [slot]})
 
     def alloc_scratch(self, name=None, length=1):
@@ -230,7 +231,7 @@ class KernelBuilder:
         # load node values in node_vals
         for i in range(0, end - st):
             slots = [("load", node_vals + i, inp_indices + i)]
-            last_loads[i // VLEN] = self.interleave_engine_fns(body, ("load", slots), inp_val_instr_idxs[i // VLEN])
+            last_loads[i // VLEN] = self.interleave_engine_fns(body, ("load", slots), inp_val_instr_idxs[i // VLEN], {"round": round})
             # last_loads.append(last_load)
 
         # check node values indexed in mini (parallel) batch
@@ -268,9 +269,10 @@ class KernelBuilder:
         return max(next_instr_idxs)
     
     @staticmethod
-    def interleave_engine_fns(body, slots, first_possible=None):
+    def interleave_engine_fns(body, slots, first_possible=None, extra_info={}):
         engine, slots = slots
         slots = slots if isinstance(slots, list) else [slots]
+        slots = [(*slot, extra_info) for slot in slots]
         first_possible = len(body) if first_possible is None else first_possible
         
         for i in range(first_possible, len(body)):
@@ -480,6 +482,10 @@ class KernelBuilder:
                 inp_val_instr_idxs = self.build_hash_opt(body, inp_val_instr_idxs, inp_values, tmp1_parallel, hash_consts_vlen, round, st, end)
                 for i in range(0, end-st):
                     self.interleave_engine_fns(body,("debug", [("compare", inp_values + i, (round, st + i, "hashed_val"))]), inp_val_instr_idxs[i // VLEN])
+
+                # no need for index update on last update
+                if round == rounds - 1:
+                    continue
 
                 # if at full depth, set idx to 0
                 if (round + 1) % (forest_height + 1) == 0:

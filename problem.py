@@ -344,9 +344,11 @@ class Machine:
                     f'{{"name": "{val}", "cat": "op", "ph": "X", "pid": {len(self.cores) + core.id}, "tid": {BASE_ADDR_TID + addr}, "ts": {self.cycle}, "dur": 1 }},\n'
                 )
 
-    def trace_slot(self, core, slot, name, i):
+    def trace_slot(self, core, slot, name, i, extra_info={}):
+        # extra_info = slot[-1]
+        # slot = slot[:-1]
         self.trace.write(
-            f'{{"name": "{slot[0]}", "cat": "op", "ph": "X", "pid": {core.id}, "tid": {self.tids[(core.id, name, i)]}, "ts": {self.cycle}, "dur": 1, "args":{{"slot": "{str(slot)}", "named": "{str(self.rewrite_slot(slot))}" }} }},\n'
+            f'{{"name": "{slot[0]}", "cat": "op", "ph": "X", "pid": {core.id}, "tid": {self.tids[(core.id, name, i)]}, "ts": {self.cycle}, "dur": 1, "args":{{"slot": "{str(slot)}", "info": "{str(extra_info)}", "named": "{str(self.rewrite_slot(slot))}" }} }},\n'
         )
 
     def step(self, instr: Instruction, core):
@@ -383,8 +385,13 @@ class Machine:
                 continue
             assert len(slots) <= SLOT_LIMITS[name]
             for i, slot in enumerate(slots):
+                extra_info = {}
+                if isinstance(slot[-1], dict):
+                    extra_info = slot[-1]
+                    slot = slot[:-1]
                 if self.trace is not None:
-                    self.trace_slot(core, slot, name, i)
+                    # print(extra_info)
+                    self.trace_slot(core, slot, name, i, extra_info)
                 ENGINE_FNS[name](core, *slot)
         for addr, val in self.scratch_write.items():
             core.scratch[addr] = val
