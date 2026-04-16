@@ -278,8 +278,8 @@ class KernelBuilder:
         """
 
         # HYPERPARAMETERS
-        n_tree_preload_layers = 2
-        parallel_vals = 256
+        n_tree_preload_layers = 3
+        parallel_vals = 128
         n_val_offsets = parallel_vals // VLEN
         n_tree_preload_layers = min(n_tree_preload_layers, forest_height + 1) # can't preload more layers than the tree has
 
@@ -340,14 +340,14 @@ class KernelBuilder:
             self.alloc_scratch(v)
             after_init_vars_instr = self.interleave_engine_fns(body, ("load", ("load", self.scratch[v], consts[c])), after_second_consts_instr)
 
-        # consts[7] = self.alloc_scratch("const_7")
-        # after_second_consts_instr = self.interleave_engine_fns(body, ("alu", ("+", consts[7], consts[1], consts[6])), after_second_consts_instr)
+        consts[7] = self.alloc_scratch("const_7")
+        after_second_consts_instr = self.interleave_engine_fns(body, ("alu", ("+", consts[7], consts[1], consts[6])), after_second_consts_instr)
 
-        # after_vlen_consts_init = None
-        # second_vlen_consts = [3,4,5,6]
-        # for c in second_vlen_consts:
-        #     slot = ("valu", ("vbroadcast", consts_vlen[c], consts[c]))
-        #     after_vlen_consts_init = self.interleave_engine_fns(body, slot, after_second_consts_instr)
+        after_vlen_consts_init = None
+        second_vlen_consts = [3,4,5,6]
+        for c in second_vlen_consts:
+            slot = ("valu", ("vbroadcast", consts_vlen[c], consts[c]))
+            after_vlen_consts_init = self.interleave_engine_fns(body, slot, after_second_consts_instr)
 
         # forest_p_const_vlen = self.alloc_scratch("forest_p_const_vlen", length=VLEN)
         slot = ("valu", ("vbroadcast", forest_consts_vlen[0], self.scratch["forest_values_p"]))
@@ -386,13 +386,13 @@ class KernelBuilder:
 
         if len(consts_vlen) > 7:
             print(f"(!!!!) not optimized path. number of const vectors: {len(consts_vlen)}")
-            for i in range(7, len(consts_vlen)):
-                slots = [("const", consts_vlen[j], j) for j in range(i, min(i + SLOT_LIMITS["load"], len(consts_vlen)))]
-                self.interleave_engine_fns(body, ("load", slots))
 
-            for i in range(7, len(consts_vlen), SLOT_LIMITS["valu"]):
-                slots = [("vbroadcast", consts_vlen[j], consts_vlen[j]) for j in range(i, min(i + SLOT_LIMITS["valu"], len(consts_vlen)))]
-                self.interleave_engine_fns(body, ("valu", slots))
+            for i in range(7, len(consts_vlen)):
+                slots = ("const", consts_vlen[i], i)
+                after_consts_3_init = self.interleave_engine_fns(body, ("load", slots), 0)
+
+                slots = ("vbroadcast", consts_vlen[i], consts_vlen[i])
+                self.interleave_engine_fns(body, ("valu", slots), after_consts_3_init)
 
         # assert parallel_vals < SLOT_LIMITS["debug"] , "Parallel vals must be less than debug slot limit to avoid overflowing debug info"
         chunk_incr = self.alloc_scratch("chunk_incr")
@@ -445,9 +445,9 @@ class KernelBuilder:
                     depth = round % (forest_height + 1)
 
                     # check input indices / values indexed in full batch
-                    for j in range(i,i+VLEN):
                         # self.interleave_engine_fns(body, ("debug", [("compare", inp_indices + i, (round, st + i, "idx"))]), inp_val_instr_idxs[i // VLEN])
-                        self.interleave_engine_fns(body, ("debug", [("compare", inp_values + j, (round, st + j, "val"))]), inp_val_instr_idxs[i // VLEN])
+                    for j in range(i,i+VLEN):
+                        self.interleave_engine_fns(body, ("debug", ("compare", inp_values + j, (round, st + j, "val"))), inp_val_instr_idxs[i // VLEN])
 
                     if depth == 0:
                         inp_val_instr_idxs = self.build_apply_node_val_root(body, i, inp_val_instr_idxs, inp_values, tree_vals_vlen[0])
