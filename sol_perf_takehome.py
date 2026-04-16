@@ -284,7 +284,7 @@ class KernelBuilder:
         n_tree_preload_layers = min(n_tree_preload_layers, forest_height + 1) # can't preload more layers than the tree has
 
         # IN-MEMORY HELPERS
-        consts_vlen = [self.alloc_scratch(f"const_{val}_vlen", length=VLEN) for val in range(2**n_tree_preload_layers)]
+        consts_vlen = [self.alloc_scratch(f"const_{val}_vlen", length=VLEN) for val in range(2**n_tree_preload_layers)] # can go back to -1?
         forest_consts_vlen = [self.alloc_scratch(f"forest_const_{val}_vlen", length=VLEN) for val in range(2**n_tree_preload_layers)]
         forest_const_m1_vlen = self.alloc_scratch(f"forest_const_m1_vlen", length=VLEN)
         tree_vals_vlen = [self.alloc_scratch(f"tree_val_{i}_vlen", length=VLEN) for i in range(2**n_tree_preload_layers)]
@@ -441,6 +441,7 @@ class KernelBuilder:
                 inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("load", slots), inp_val_instr_idxs[i // VLEN])
 
             for i in range(0,chunk_len,VLEN):
+                
                 for round in range(rounds):
                     depth = round % (forest_height + 1)
 
@@ -449,6 +450,8 @@ class KernelBuilder:
                     for j in range(i,i+VLEN):
                         self.interleave_engine_fns(body, ("debug", ("compare", inp_values + j, (round, st + j, "val"))), inp_val_instr_idxs[i // VLEN])
 
+                    # if i == VLEN:
+                    #     inp_val_instr_idxs = self.build_apply_node_val_mem(body, i, inp_val_instr_idxs, inp_indices, inp_values, node_vals, round, st, end)
                     if depth == 0:
                         inp_val_instr_idxs = self.build_apply_node_val_root(body, i, inp_val_instr_idxs, inp_values, tree_vals_vlen[0])
                     elif depth < n_tree_preload_layers:
