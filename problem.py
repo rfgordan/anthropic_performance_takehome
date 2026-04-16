@@ -144,6 +144,8 @@ class Machine:
         return res
 
     def rewrite_slot(self, slot):
+        if isinstance(slot[-1], dict):
+            slot = slot[:-1]
         return tuple(
             self.debug_info.scratch_map.get(s, (None, None))[0] or s for s in slot
         )
