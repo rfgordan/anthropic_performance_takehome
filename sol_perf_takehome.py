@@ -396,7 +396,7 @@ class KernelBuilder:
 
         # assert parallel_vals < SLOT_LIMITS["debug"] , "Parallel vals must be less than debug slot limit to avoid overflowing debug info"
         chunk_incr = self.alloc_scratch("chunk_incr")
-        self.interleave_engine_fns(body, ("load", ("const", chunk_incr, parallel_vals)), 0)
+        after_chunk_incr_idx = self.interleave_engine_fns(body, ("load", ("const", chunk_incr, parallel_vals)), 0)
 
         after_load_tree_vals_instr = self.build_load_tree_vals(body, max(after_init_vars_instr,after_vlen_consts_init), tree_vals_vlen, consts_vlen)
 
@@ -414,6 +414,7 @@ class KernelBuilder:
 
         # inp_val_instr_idxs = [len(body)] * (parallel_vals // VLEN)
         inp_val_instr_idxs = after_init_offsets_instrs
+        # past_offset_instr_idxs = [0] * len(inp_val_instr_idxs)
 
         # parallel path: take parallel_vals chunks of batch size and process
         for ci, st in enumerate(range(0, batch_size, parallel_vals)):
@@ -423,24 +424,35 @@ class KernelBuilder:
 
             next_instr_idxs = [None] * len(inp_val_instr_idxs)
             
-            # if not the first chunk, reset index values
-            for i in range(0, parallel_vals, VLEN):
+            # # if not the first chunk, reset index values
+            # for i in range(0, parallel_vals, VLEN):
+            #     slots = ("vbroadcast", inp_indices + i, forest_consts_vlen[0])
+            #     next_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
+
+            # if ci > 0:
+            #     # increment offsets by parallel_vals for next chunk
+            #     for i in range(0, n_val_offsets):
+            #         slots = ("+", inp_val_offsets + i, inp_val_offsets + i, chunk_incr)
+            #         next_instr_idx = self.interleave_engine_fns(body, ("alu", slots), inp_val_instr_idxs[i])
+            #         inp_val_instr_idxs[i] = max(next_instr_idxs[i], next_instr_idx)
+
+            # assert chunk_len % VLEN == 0, "If chunk length isn't a multiple of VLEN, vload could overrun inp_values"
+            # for i in range(0, chunk_len, VLEN):
+            #     slots = [("vload", inp_values + i, inp_val_offsets + i // VLEN)]
+            #     inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("load", slots), inp_val_instr_idxs[i // VLEN])
+
+            for i in range(0,chunk_len,VLEN):
+
                 slots = ("vbroadcast", inp_indices + i, forest_consts_vlen[0])
                 next_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
 
-            if ci > 0:
-                # increment offsets by parallel_vals for next chunk
-                for i in range(0, n_val_offsets):
-                    slots = ("+", inp_val_offsets + i, inp_val_offsets + i, chunk_incr)
-                    next_instr_idx = self.interleave_engine_fns(body, ("alu", slots), inp_val_instr_idxs[i])
-                    inp_val_instr_idxs[i] = max(next_instr_idxs[i], next_instr_idx)
+                if ci > 0:
+                    slots = ("+", inp_val_offsets + i // VLEN, inp_val_offsets + i // VLEN, chunk_incr)
+                    inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("alu", slots), after_init_offsets_instrs[i // VLEN])
+                    # inp_val_instr_idxs[i] = max(next_instr_idxs[i], next_instr_idx)
 
-            assert chunk_len % VLEN == 0, "If chunk length isn't a multiple of VLEN, vload could overrun inp_values"
-            for i in range(0, chunk_len, VLEN):
                 slots = [("vload", inp_values + i, inp_val_offsets + i // VLEN)]
                 inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("load", slots), inp_val_instr_idxs[i // VLEN])
-
-            for i in range(0,chunk_len,VLEN):
                 
                 for round in range(rounds):
                     depth = round % (forest_height + 1)
