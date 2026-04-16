@@ -423,28 +423,13 @@ class KernelBuilder:
             chunk_len = end - st
 
             next_instr_idxs = [None] * len(inp_val_instr_idxs)
-            
-            # # if not the first chunk, reset index values
-            # for i in range(0, parallel_vals, VLEN):
-            #     slots = ("vbroadcast", inp_indices + i, forest_consts_vlen[0])
-            #     next_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
 
-            # if ci > 0:
-            #     # increment offsets by parallel_vals for next chunk
-            #     for i in range(0, n_val_offsets):
-            #         slots = ("+", inp_val_offsets + i, inp_val_offsets + i, chunk_incr)
-            #         next_instr_idx = self.interleave_engine_fns(body, ("alu", slots), inp_val_instr_idxs[i])
-            #         inp_val_instr_idxs[i] = max(next_instr_idxs[i], next_instr_idx)
-
-            # assert chunk_len % VLEN == 0, "If chunk length isn't a multiple of VLEN, vload could overrun inp_values"
-            # for i in range(0, chunk_len, VLEN):
-            #     slots = [("vload", inp_values + i, inp_val_offsets + i // VLEN)]
-            #     inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("load", slots), inp_val_instr_idxs[i // VLEN])
+            assert chunk_len % VLEN == 0, "If chunk length isn't a multiple of VLEN, vload could overrun inp_values"
 
             for i in range(0,chunk_len,VLEN):
 
                 slots = ("vbroadcast", inp_indices + i, forest_consts_vlen[0])
-                next_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
+                next_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), after_forest_vlen_instr)
 
                 if ci > 0:
                     slots = ("+", inp_val_offsets + i // VLEN, inp_val_offsets + i // VLEN, chunk_incr)
