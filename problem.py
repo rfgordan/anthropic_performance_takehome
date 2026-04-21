@@ -576,7 +576,7 @@ def reference_kernel2(mem: list[int], trace: dict[Any, int] = {}):
     for h in range(rounds):
         for i in range(batch_size):
             idx = mem[inp_indices_p + i]
-            trace[(h, i, "idx")] = idx
+            trace[(h, i, "idx")] = idx + forest_values_p
             val = mem[inp_values_p + i]
             trace[(h, i, "val")] = val
             node_val = mem[forest_values_p + idx]
@@ -586,7 +586,7 @@ def reference_kernel2(mem: list[int], trace: dict[Any, int] = {}):
             idx = 2 * idx + (1 if val % 2 == 0 else 2)
             # trace[(h, i, "next_idx")] = idx
             idx = 0 if idx >= n_nodes else idx
-            trace[(h, i, "wrapped_idx")] = idx
+            trace[(h, i, "wrapped_idx")] = idx + forest_values_p
             mem[inp_values_p + i] = val
             mem[inp_indices_p + i] = idx
     # You can add new yields or move this around for debugging
