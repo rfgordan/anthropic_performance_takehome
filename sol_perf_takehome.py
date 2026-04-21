@@ -278,7 +278,7 @@ class KernelBuilder:
 
         # HYPERPARAMETERS
         n_tree_preload_layers = 3
-        parallel_vals = 256
+        parallel_vals = 128
         n_val_offsets = parallel_vals // VLEN
         n_tree_preload_layers = min(n_tree_preload_layers, forest_height + 1) # can't preload more layers than the tree has
 
@@ -415,6 +415,7 @@ class KernelBuilder:
         inp_val_instr_idxs = after_init_offsets_instrs
         # past_offset_instr_idxs = [0] * len(inp_val_instr_idxs)
 
+
         # parallel path: take parallel_vals chunks of batch size and process
         for ci, st in enumerate(range(0, batch_size, parallel_vals)):
 
@@ -425,63 +426,75 @@ class KernelBuilder:
 
             assert chunk_len % VLEN == 0, "If chunk length isn't a multiple of VLEN, vload could overrun inp_values"
 
-            for round in range(rounds):
-                for i in range(0,chunk_len,VLEN):
+            def process_vector(round, i, inp_val_instr_idxs):
+                debug_info = {"round": round, "st": st, "i": i}
+                depth = round % (forest_height + 1)
 
-                    debug_info = {"round": round, "st": st, "i": i}
-                    depth = round % (forest_height + 1)
+                if round == 0:
+                    if ci > 0:
+                        slots = ("+", inp_val_offsets + i // VLEN, inp_val_offsets + i // VLEN, chunk_incr)
+                        inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("alu", slots), inp_val_instr_idxs[i // VLEN])
 
-                    if round == 0:
-                        if ci > 0:
-                            slots = ("+", inp_val_offsets + i // VLEN, inp_val_offsets + i // VLEN, chunk_incr)
-                            inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("alu", slots), inp_val_instr_idxs[i // VLEN])
+                    slots = ("vbroadcast", inp_indices + i, forest_consts_vlen[0])
+                    next_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
 
-                        slots = ("vbroadcast", inp_indices + i, forest_consts_vlen[0])
-                        next_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
+                    slots = [("vload", inp_values + i, inp_val_offsets + i // VLEN)]
+                    inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("load", slots), inp_val_instr_idxs[i // VLEN])
 
-                        slots = [("vload", inp_values + i, inp_val_offsets + i // VLEN)]
-                        inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("load", slots), inp_val_instr_idxs[i // VLEN])
+                    inp_val_instr_idxs[i // VLEN] = max(next_instr_idxs[i // VLEN], inp_val_instr_idxs[i // VLEN])
 
-                        inp_val_instr_idxs[i // VLEN] = max(next_instr_idxs[i // VLEN], inp_val_instr_idxs[i // VLEN])
+                # check input indices / values indexed in full batch
+                for j in range(i,i+VLEN):
+                    self.interleave_engine_fns(body, ("debug", [("compare", inp_indices + j, (round, st + j, "idx"))]), inp_val_instr_idxs[i // VLEN])
+                    self.interleave_engine_fns(body, ("debug", ("compare", inp_values + j, (round, st + j, "val"))), inp_val_instr_idxs[i // VLEN])
 
-                    # check input indices / values indexed in full batch
-                    for j in range(i,i+VLEN):
-                        self.interleave_engine_fns(body, ("debug", [("compare", inp_indices + j, (round, st + j, "idx"))]), inp_val_instr_idxs[i // VLEN])
-                        self.interleave_engine_fns(body, ("debug", ("compare", inp_values + j, (round, st + j, "val"))), inp_val_instr_idxs[i // VLEN])
+                # if i == VLEN:
+                #     inp_val_instr_idxs = self.build_apply_node_val_mem(body, i, inp_val_instr_idxs, inp_indices, inp_values, node_vals, round, st, end)
+                if depth == 0:
+                    inp_val_instr_idxs = self.build_apply_node_val_root(body, i, inp_val_instr_idxs, inp_values, tree_vals_vlen[0])
+                elif depth < n_tree_preload_layers:
+                    inp_val_instr_idxs = self.build_apply_node_val_masked(body, i, inp_val_instr_idxs, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, forest_consts_vlen, consts_vlen, round, depth, chunk_len)
+                else:
+                    inp_val_instr_idxs = self.build_apply_node_val_mem(body, i, inp_val_instr_idxs, inp_indices, inp_values, node_vals, round, st, end, debug_info)
 
-                    # if i == VLEN:
-                    #     inp_val_instr_idxs = self.build_apply_node_val_mem(body, i, inp_val_instr_idxs, inp_indices, inp_values, node_vals, round, st, end)
-                    if depth == 0:
-                        inp_val_instr_idxs = self.build_apply_node_val_root(body, i, inp_val_instr_idxs, inp_values, tree_vals_vlen[0])
-                    elif depth < n_tree_preload_layers:
-                        inp_val_instr_idxs = self.build_apply_node_val_masked(body, i, inp_val_instr_idxs, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, forest_consts_vlen, consts_vlen, round, depth, chunk_len)
-                    else:
-                        inp_val_instr_idxs = self.build_apply_node_val_mem(body, i, inp_val_instr_idxs, inp_indices, inp_values, node_vals, round, st, end, debug_info)
+                inp_val_instr_idxs = self.build_hash_opt(body, i, inp_val_instr_idxs, inp_values, tmp1_parallel, hash_consts_vlen, round, st, end, debug_info)
+                for j in range(i,i+VLEN):
+                    self.interleave_engine_fns(body,("debug", [("compare", inp_values + j, (round, st + j, "hashed_val"))]), inp_val_instr_idxs[i // VLEN])
 
-                    inp_val_instr_idxs = self.build_hash_opt(body, i, inp_val_instr_idxs, inp_values, tmp1_parallel, hash_consts_vlen, round, st, end, debug_info)
-                    for j in range(i,i+VLEN):
-                        self.interleave_engine_fns(body,("debug", [("compare", inp_values + j, (round, st + j, "hashed_val"))]), inp_val_instr_idxs[i // VLEN])
+                
+                if round == rounds - 1:
+                    # use vstore operations to write the inputs back to memory
+                    slots = [("vstore", inp_val_offsets + (i // VLEN), inp_values + i)]
+                    inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("store", slots), inp_val_instr_idxs[i // VLEN])
 
-                    
-                    if round == rounds - 1:
-                        # use vstore operations to write the inputs back to memory
-                        slots = [("vstore", inp_val_offsets + (i // VLEN), inp_values + i)]
-                        inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("store", slots), inp_val_instr_idxs[i // VLEN])
+                    # no need for index update on last update
+                    return
 
-                        # no need for index update on last update
-                        continue
+                # if at full depth, set idx to 0
+                if (round + 1) % (forest_height + 1) == 0:
+                    inp_val_instr_idxs = self.build_idx_wrap(body, i, inp_val_instr_idxs, inp_indices, end - st, forest_consts_vlen[0])
+                # idx = 2*idx + (1 if val % 2 == 0 else 2)
+                else:
+                    inp_val_instr_idxs = self.build_idx_next(body, i, inp_val_instr_idxs, inp_indices, inp_values, tmp1_parallel, end - st, forest_const_m1_vlen, consts_vlen[1], consts_vlen[2])
 
-                    # if at full depth, set idx to 0
-                    if (round + 1) % (forest_height + 1) == 0:
-                        inp_val_instr_idxs = self.build_idx_wrap(body, i, inp_val_instr_idxs, inp_indices, end - st, forest_consts_vlen[0])
-                    # idx = 2*idx + (1 if val % 2 == 0 else 2)
-                    else:
-                        inp_val_instr_idxs = self.build_idx_next(body, i, inp_val_instr_idxs, inp_indices, inp_values, tmp1_parallel, end - st, forest_const_m1_vlen, consts_vlen[1], consts_vlen[2])
+                for j in range(i,i+VLEN):
+                    self.interleave_engine_fns(body,("debug", [("compare", inp_indices + j, (round, st + j, "wrapped_idx"))]), inp_val_instr_idxs[i // VLEN])
 
-                    for j in range(i,i+VLEN):
-                        self.interleave_engine_fns(body,("debug", [("compare", inp_indices + j, (round, st + j, "wrapped_idx"))]), inp_val_instr_idxs[i // VLEN])
+                # on last round, can potentially skip index update
+            
 
-                    # on last round, can potentially skip index update
+            # go through first 3 rounds vector by vector, then process the chunk in parallel
+            schedule = [(range(0,3), "vector"), (range(3,10), "chunk"), (range(10,13), "vector"), (range(13,16), "chunk")]
+            for round_range, process_algo in schedule:
+                if process_algo == "chunk":
+                    for round in round_range:
+                        for i in range(0,chunk_len,VLEN):
+                            process_vector(round,i, inp_val_instr_idxs)
+                elif process_algo == "vector":
+                    for i in range(0,chunk_len,VLEN):
+                        for round in round_range:
+                            process_vector(round,i, inp_val_instr_idxs)
+
 
 
         print("Total scratch used: ", self.scratch_ptr, "remaining: ", SCRATCH_SIZE - self.scratch_ptr)
