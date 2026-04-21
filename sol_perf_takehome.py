@@ -441,28 +441,27 @@ class KernelBuilder:
             #     inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("load", slots), inp_val_instr_idxs[i // VLEN])
 
             for round in range(rounds):
-                depth = round % (forest_height + 1)
-            
-
                 for i in range(0,chunk_len,VLEN):
-                    debug_info = {"round": round, "st": st, "i": i}
 
-                    if ci > 0:
-                        slots = ("+", inp_val_offsets + i // VLEN, inp_val_offsets + i // VLEN, chunk_incr)
-                        inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("alu", slots), after_init_offsets_instrs[i // VLEN])
+                    debug_info = {"round": round, "st": st, "i": i}
+                    depth = round % (forest_height + 1)
 
                     if round == 0:
+                        if ci > 0:
+                            slots = ("+", inp_val_offsets + i // VLEN, inp_val_offsets + i // VLEN, chunk_incr)
+                            inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("alu", slots), inp_val_instr_idxs[i // VLEN])
+
                         slots = ("vbroadcast", inp_indices + i, forest_consts_vlen[0])
                         next_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
 
                         slots = [("vload", inp_values + i, inp_val_offsets + i // VLEN)]
                         inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("load", slots), inp_val_instr_idxs[i // VLEN])
 
-                        # inp_val_instr_idxs[i] = max(next_instr_idxs[i], next_instr_idx)
+                        inp_val_instr_idxs[i // VLEN] = max(next_instr_idxs[i // VLEN], inp_val_instr_idxs[i // VLEN])
 
                     # check input indices / values indexed in full batch
-                        # self.interleave_engine_fns(body, ("debug", [("compare", inp_indices + i, (round, st + i, "idx"))]), inp_val_instr_idxs[i // VLEN])
                     for j in range(i,i+VLEN):
+                        self.interleave_engine_fns(body, ("debug", [("compare", inp_indices + j, (round, st + j, "idx"))]), inp_val_instr_idxs[i // VLEN])
                         self.interleave_engine_fns(body, ("debug", ("compare", inp_values + j, (round, st + j, "val"))), inp_val_instr_idxs[i // VLEN])
 
                     # if i == VLEN:
@@ -478,8 +477,13 @@ class KernelBuilder:
                     for j in range(i,i+VLEN):
                         self.interleave_engine_fns(body,("debug", [("compare", inp_values + j, (round, st + j, "hashed_val"))]), inp_val_instr_idxs[i // VLEN])
 
-                    # no need for index update on last update
+                    
                     if round == rounds - 1:
+                        # use vstore operations to write the inputs back to memory
+                        slots = [("vstore", inp_val_offsets + (i // VLEN), inp_values + i)]
+                        inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("store", slots), inp_val_instr_idxs[i // VLEN])
+
+                        # no need for index update on last update
                         continue
 
                     # if at full depth, set idx to 0
@@ -489,16 +493,11 @@ class KernelBuilder:
                     else:
                         inp_val_instr_idxs = self.build_idx_next(body, i, inp_val_instr_idxs, inp_indices, inp_values, tmp1_parallel, end - st, forest_const_m1_vlen, consts_vlen[1], consts_vlen[2])
 
-                    # for i in range(0, end - st):
-                    #     self.interleave_engine_fns(body,("debug", [("compare", inp_indices + i, (round, st + i, "wrapped_idx"))]), inp_val_instr_idxs[i // VLEN])
+                    for j in range(i,i+VLEN):
+                        self.interleave_engine_fns(body,("debug", [("compare", inp_indices + j, (round, st + j, "wrapped_idx"))]), inp_val_instr_idxs[i // VLEN])
 
                     # on last round, can potentially skip index update
 
-                    if round == rounds - 1:
-                        # use vstore operations to write the inputs back to memory
-                        # for i in range(0, chunk_len, VLEN):
-                        slots = [("vstore", inp_val_offsets + (i // VLEN), inp_values + i)]
-                        inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("store", slots), inp_val_instr_idxs[i // VLEN])
 
         print("Total scratch used: ", self.scratch_ptr, "remaining: ", SCRATCH_SIZE - self.scratch_ptr)
         
