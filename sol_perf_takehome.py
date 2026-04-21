@@ -278,7 +278,7 @@ class KernelBuilder:
 
         # HYPERPARAMETERS
         n_tree_preload_layers = 3
-        parallel_vals = 128
+        parallel_vals = 256
         n_val_offsets = parallel_vals // VLEN
         n_tree_preload_layers = min(n_tree_preload_layers, forest_height + 1) # can't preload more layers than the tree has
 
@@ -484,7 +484,9 @@ class KernelBuilder:
             
 
             # go through first 3 rounds vector by vector, then process the chunk in parallel
-            schedule = [(range(0,3), "vector"), (range(3,10), "chunk"), (range(10,13), "vector"), (range(13,16), "chunk")]
+            # schedule = [(range(0,3), "vector"), (range(3,10), "chunk"), (range(10,13), "vector"), (range(13,16), "chunk")]
+            switch_point = 14
+            schedule = [(range(0,switch_point), "vector"), (range(switch_point,16), "chunk")]
             for round_range, process_algo in schedule:
                 if process_algo == "chunk":
                     for round in round_range:
