@@ -278,7 +278,7 @@ class KernelBuilder:
 
         # HYPERPARAMETERS
         n_tree_preload_layers = 3
-        parallel_vals = 128
+        parallel_vals = 256
         n_val_offsets = parallel_vals // VLEN
         n_tree_preload_layers = min(n_tree_preload_layers, forest_height + 1) # can't preload more layers than the tree has
 
@@ -428,22 +428,7 @@ class KernelBuilder:
             for round in range(rounds):
                 for i in range(0,chunk_len,VLEN):
 
-<<<<<<< HEAD
-                slots = ("vbroadcast", inp_indices + i, forest_consts_vlen[0])
-                next_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), after_forest_vlen_instr)
-
-                if ci > 0:
-                    slots = ("+", inp_val_offsets + i // VLEN, inp_val_offsets + i // VLEN, chunk_incr)
-                    inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("alu", slots), after_init_offsets_instrs[i // VLEN])
-                    # inp_val_instr_idxs[i] = max(next_instr_idxs[i], next_instr_idx)
-
-                slots = [("vload", inp_values + i, inp_val_offsets + i // VLEN)]
-                inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("load", slots), inp_val_instr_idxs[i // VLEN])
-                
-                for round in range(rounds):
-=======
                     debug_info = {"round": round, "st": st, "i": i}
->>>>>>> round-first-processing
                     depth = round % (forest_height + 1)
 
                     if round == 0:
