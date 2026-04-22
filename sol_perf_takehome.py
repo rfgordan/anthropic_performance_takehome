@@ -36,7 +36,6 @@ from problem import (
     reference_kernel2,
 )
 
-
 class KernelBuilder:
     def __init__(self):
         self.instrs = []
@@ -217,7 +216,6 @@ class KernelBuilder:
         # perform XOR with node values in parallel
         slots = ("^", inp_values + i, inp_values + i, node_vals + i)
         inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), max(loads))
-
         # # broadcast forest location in mem
         # for i in range(0, end - st, VLEN):
         #     slots = [("-", inp_indices + i, inp_indices + i, forest_p_const_vlen)]
@@ -251,6 +249,9 @@ class KernelBuilder:
         slots = [(op, dest + i, a1 + i, a2 + i) + extra_info for i in range(VLEN)]
         return slots
 
+    # @staticmethod
+    # def is_valid_1x_valu_expansion(body, i):
+
 
     @staticmethod
     def interleave_engine_fns(body, slot, first_possible=None, extra_info={}, should_pack_valu=True):
@@ -268,14 +269,29 @@ class KernelBuilder:
                 instr[engine].append(slot)
                 return i + 1
             
-            if should_pack_valu and engine == "valu" and slot[0] not in ("vbroadcast", "multiply_add") and ("alu" not in instr or len(instr["alu"]) + VLEN <= SLOT_LIMITS["alu"]):
-                slots = KernelBuilder.valu_slot_to_alu_slot(slot)
-                print("Transformed slots: ", slot, " -> ", slots)
+            if should_pack_valu and engine == "valu" and slot[0] not in ("vbroadcast", "multiply_add"):
+
                 if "alu" not in instr:
                     instr["alu"] = []
 
-                instr["alu"].extend(slots)
-                return i + 1
+                # shift whole slot into alu engine
+                if len(instr["alu"]) + VLEN <= SLOT_LIMITS["alu"]:
+                    slots = KernelBuilder.valu_slot_to_alu_slot(slot)
+                    instr["alu"].extend(slots)
+                    return i + 1
+                
+                next_slot_is_eligible = i+1==len(body) or "alu" not in body[i+1] or len(body[i+1]["alu"]) + VLEN // 2 <= SLOT_LIMITS["alu"]
+                # shift slot half into current instruction, half into next
+                if len(instr["alu"]) + VLEN // 2 <= SLOT_LIMITS["alu"] and next_slot_is_eligible:
+                    slots = KernelBuilder.valu_slot_to_alu_slot(slot)
+                    slots_first = slots[:VLEN // 2]
+                    slots_second = slots[VLEN // 2:]
+                    print("Slots split: ", slots_first, "Second: ", slots_second)
+                    instr["alu"].extend(slots_first)
+                    for slot_second in slots_second:
+                        KernelBuilder.interleave_engine_fns(body, ("alu", slot_second[:-1]), i+1, extra_info)
+                    return i+2
+
 
         body.append({engine: [slot]})
         return len(body)
@@ -425,6 +441,7 @@ class KernelBuilder:
 
         # inp_val_instr_idxs = [len(body)] * (parallel_vals // VLEN)
         inp_val_instr_idxs = after_init_offsets_instrs
+        # node_val_instr_idxs = inp_val_instr_idxs.copy()
         # past_offset_instr_idxs = [0] * len(inp_val_instr_idxs)
 
 
@@ -460,8 +477,6 @@ class KernelBuilder:
                     self.interleave_engine_fns(body, ("debug", ("compare", inp_indices + j, (round, st + j, "idx"))), inp_val_instr_idxs[i // VLEN])
                     self.interleave_engine_fns(body, ("debug", ("compare", inp_values + j, (round, st + j, "val"))), inp_val_instr_idxs[i // VLEN])
 
-                # if i == VLEN:
-                #     inp_val_instr_idxs = self.build_apply_node_val_mem(body, i, inp_val_instr_idxs, inp_indices, inp_values, node_vals, round, st, end)
                 if depth == 0:
                     inp_val_instr_idxs = self.build_apply_node_val_root(body, i, inp_val_instr_idxs, inp_values, tree_vals_vlen[0])
                 elif depth < n_tree_preload_layers:
@@ -497,7 +512,7 @@ class KernelBuilder:
 
             # go through first 3 rounds vector by vector, then process the chunk in parallel
             # schedule = [(range(0,3), "vector"), (range(3,10), "chunk"), (range(10,13), "vector"), (range(13,16), "chunk")]
-            switch_point = 14
+            switch_point = 13
             schedule = [(range(0,switch_point), "vector"), (range(switch_point,16), "chunk")]
             for round_range, process_algo in schedule:
                 if process_algo == "chunk":
