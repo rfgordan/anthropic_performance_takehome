@@ -175,7 +175,7 @@ class KernelBuilder:
         # set node_vals to 0
         if round > 0:
             slots = ("vbroadcast", node_vals + i, consts_vlen[0])
-            inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
+            post_reset_node_vals = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
 
         # iterate over all possible tree nodes
         for j in range(2**depth - 1, 2**(depth + 1) - 1):
@@ -187,7 +187,7 @@ class KernelBuilder:
             slots = ("multiply_add", node_vals + i, tmp1_parallel + i, tree_vals_vlen[j], node_vals + i)
 
             # we want to depend on the final m_add
-            inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), post_mask_instr_idx)
+            inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), max(post_mask_instr_idx,post_reset_node_vals))
 
         slots = ("^", inp_values + i, node_vals + i, inp_values + i)
         inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
