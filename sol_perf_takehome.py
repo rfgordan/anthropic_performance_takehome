@@ -175,7 +175,7 @@ class KernelBuilder:
         # set node_vals to 0
         if round > 0:
             slots = ("vbroadcast", node_vals + i, consts_vlen[0])
-            self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
+            inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
 
         # iterate over all possible tree nodes
         for j in range(2**depth - 1, 2**(depth + 1) - 1):
