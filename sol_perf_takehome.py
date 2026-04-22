@@ -313,8 +313,11 @@ class KernelBuilder:
         n_val_offsets = parallel_vals // VLEN
         n_tree_preload_layers = min(n_tree_preload_layers, forest_height + 1) # can't preload more layers than the tree has
 
-        # IN-MEMORY HELPERS
+        # IN-MEMORY NODE VALS
         in_mem_node_vals = self.alloc_scratch("in_mem_node_vals", length=n_jump_layers_enabled)
+        
+
+        # IN-MEMORY HELPERS
         consts_vlen = [self.alloc_scratch(f"const_{val}_vlen", length=VLEN) for val in range(n_tree_preload_vecs)] # can go back to -1?
         forest_consts_vlen = [self.alloc_scratch(f"forest_const_{val}_vlen", length=VLEN) for val in range(n_tree_preload_vecs)]
         forest_const_m1_vlen = self.alloc_scratch(f"forest_const_m1_vlen", length=VLEN)
