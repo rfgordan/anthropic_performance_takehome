@@ -305,15 +305,20 @@ class KernelBuilder:
 
         # HYPERPARAMETERS
         n_tree_preload_layers = 3
+        n_jump_layers_enabled = 4
+        n_tree_preload_vecs = 2**n_tree_preload_layers - 1
+        n_jump_layers_enabled = 2**(n_jump_layers_enabled + n_tree_preload_layers) - 2**n_tree_preload_layers
+        print("n_jump_layers_enabled: ", n_jump_layers_enabled)
         parallel_vals = 256
         n_val_offsets = parallel_vals // VLEN
         n_tree_preload_layers = min(n_tree_preload_layers, forest_height + 1) # can't preload more layers than the tree has
 
         # IN-MEMORY HELPERS
-        consts_vlen = [self.alloc_scratch(f"const_{val}_vlen", length=VLEN) for val in range(2**n_tree_preload_layers - 1)] # can go back to -1?
-        forest_consts_vlen = [self.alloc_scratch(f"forest_const_{val}_vlen", length=VLEN) for val in range(2**n_tree_preload_layers - 1)]
+        in_mem_node_vals = self.alloc_scratch("in_mem_node_vals", length=n_jump_layers_enabled)
+        consts_vlen = [self.alloc_scratch(f"const_{val}_vlen", length=VLEN) for val in range(n_tree_preload_vecs)] # can go back to -1?
+        forest_consts_vlen = [self.alloc_scratch(f"forest_const_{val}_vlen", length=VLEN) for val in range(n_tree_preload_vecs)]
         forest_const_m1_vlen = self.alloc_scratch(f"forest_const_m1_vlen", length=VLEN)
-        tree_vals_vlen = [self.alloc_scratch(f"tree_val_{i}_vlen", length=VLEN) for i in range(2**n_tree_preload_layers - 1)]
+        tree_vals_vlen = [self.alloc_scratch(f"tree_val_{i}_vlen", length=VLEN) for i in range(n_tree_preload_vecs)]
         inp_val_offsets = self.alloc_scratch("inp_val_offsets", length=n_val_offsets)
         node_vals = self.alloc_scratch("node_vals", length=parallel_vals)
         tmp1_parallel = self.alloc_scratch("tmp1_parallel", length=parallel_vals)
