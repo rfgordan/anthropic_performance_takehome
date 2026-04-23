@@ -633,10 +633,18 @@ class KernelBuilder:
 
             assert chunk_len % VLEN == 0, "If chunk length isn't a multiple of VLEN, vload could overrun inp_values"
 
-            # use jump load for one every 8 vectors 
+            # use jump load for one every 8 vectors
+            total_routed_count = 0
+            jump_loaded_count = 0
+            jump_load_every_n = 11
             def should_route_vector_to_jump_load(i, round, depth, n_tree_preload_layers, n_jump_layers_enabled):
+                nonlocal total_routed_count, jump_loaded_count
                 can_jump_load = n_tree_preload_layers <= depth < n_jump_layers_enabled
-                return can_jump_load and i + (ci * parallel_vals) + (round * batch_size) % (8 * VLEN) == 0
+                should_jump_load = can_jump_load and jump_loaded_count < total_routed_count // jump_load_every_n
+                total_routed_count += 1
+                jump_loaded_count += int(should_jump_load)
+                print("Routing total count: ", total_routed_count, " jump loaded count: ", jump_loaded_count, " decision:", should_jump_load)
+                return should_jump_load
             
             def process_vector(round, i, inp_val_instr_idxs):
                 debug_info = {"round": round, "st": st, "i": i}
