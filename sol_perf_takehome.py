@@ -213,8 +213,8 @@ class KernelBuilder:
 
         jump_load_data={
             "dest" : node_vals + j,
-            "st" : in_mem_node_vals + 2**depth - 1,
-            "end" : in_mem_node_vals + 2**(depth + 1) - 1,
+            "st" : in_mem_node_vals + 2**depth - 2**n_tree_preload_layers,
+            "end" : in_mem_node_vals + 2**(depth + 1) - 2**n_tree_preload_layers,
             "post_jump_load_offset" : post_jump_load_offset
         }
 
@@ -233,7 +233,7 @@ class KernelBuilder:
 
         # load node values in node_vals
         for j in range(i,i+VLEN):
-            # if depth  and st == 0 and j == 2:
+            # if depth == 3 and st == 0 and j == 2:
             if depth in range(n_tree_preload_layers, n_tree_preload_layers + n_jump_layers_enabled) and st == 0 and j == 2:
                 loads[j-i] = self.build_scratch_jump_load(body, j, inp_val_instr_idxs, jump_load_pointer, post_jump_load_offset, inp_indices, node_vals, in_mem_node_vals, jump_layer_offsets, depth, n_tree_preload_layers, debug_info)
                 print("Instruction after jump load: ", loads[j-i])
@@ -371,6 +371,7 @@ class KernelBuilder:
         for i, instr in enumerate(body):
             if "flow" in instr and instr["flow"][0][0] == "jump_indirect":
 
+                print("expanding jump load with second dest: ", i + 1 - num_prev_jump_expands)
                 jump2_instr = body[i+1]
                 # print(self.reserved_jump_instr_idxs)
                 jump_data = self.reserved_jump_instr_idxs[i+1]
@@ -564,18 +565,6 @@ class KernelBuilder:
             slot = ("+", inp_val_offsets + i, inp_val_offsets + i, self.scratch["inp_values_p"])
             after_init_offsets_instrs[i] = self.interleave_engine_fns(body, ("alu", slot), after_init_offsets_instrs[i])
 
-        # JUMP in-mem setup
-        after_init_jump_offsets = [len(body)] * n_jump_offsets
-        for i in range(0, n_jump_offsets):
-            slot = ("const", jump_offsets + i, i * VLEN)
-            after_init_jump_offsets[i] = self.interleave_engine_fns(body, ("load", slot), 0)
-
-            slot = ("+", jump_offsets + i, jump_offsets + i, self.scratch["forest_values_p"])
-            after_init_jump_offsets[i] = self.interleave_engine_fns(body, ("alu", slot), max(after_init_jump_offsets[i], after_init_vars_instr))
-
-            slot = ("vload", in_mem_node_vals + i * VLEN, jump_offsets + i)
-            after_init_jump_offsets[i] = self.interleave_engine_fns(body, ("load", slot), after_init_jump_offsets[i])
-
         after_jump_layer_load = [len(body)] * (n_jump_layers_enabled + 1)
         for i in range(n_jump_layers_enabled + 1):
             abs_tree_layer = i + n_tree_preload_layers
@@ -588,6 +577,19 @@ class KernelBuilder:
 
         slot = ("const", jump_load_pointer, last_non_jump_instr)
         after_jump_pointer_setup = self.interleave_engine_fns(body, ("load", slot), 0)
+
+        # JUMP in-mem setup
+        after_init_jump_offsets = [len(body)] * n_jump_offsets
+        for i in range(0, n_jump_offsets):
+            slot = ("const", jump_offsets + i, i * VLEN)
+            after_init_jump_offsets[i] = self.interleave_engine_fns(body, ("load", slot), 0)
+
+            # start loading from start of first layer in-memory
+            slot = ("+", jump_offsets + i, jump_offsets + i, jump_layer_offsets)
+            after_init_jump_offsets[i] = self.interleave_engine_fns(body, ("alu", slot), max(after_init_jump_offsets[i], after_jump_layer_load[0]))
+
+            slot = ("vload", in_mem_node_vals + i * VLEN, jump_offsets + i)
+            after_init_jump_offsets[i] = self.interleave_engine_fns(body, ("load", slot), after_init_jump_offsets[i])
 
         # inp_val_instr_idxs = [len(body)] * (parallel_vals // VLEN)
         inp_val_instr_idxs = after_init_offsets_instrs
