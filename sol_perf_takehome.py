@@ -194,7 +194,7 @@ class KernelBuilder:
 
         return inp_val_instr_idxs
     
-    def build_scratch_jump_load(self, body, j, inp_val_instr_idxs, jump_load_pointer, inp_indices, node_vals, in_mem_node_vals, jump_layer_offsets, depth, debug_info):
+    def build_scratch_jump_load(self, body, j, inp_val_instr_idxs, jump_load_pointer, inp_indices, node_vals, in_mem_node_vals, jump_layer_offsets, depth, n_tree_preload_layers, debug_info):
 
         # index to correct instruction within jump lock
         slot = ("+", jump_load_pointer, jump_load_pointer, inp_indices + j)
@@ -204,7 +204,7 @@ class KernelBuilder:
         # slot = ("^", node_vals + j, node_vals + j, node_vals + j)
         # after_zero_node_val = self.interleave_engine_fns(body, ("alu", slot), inp_val_instr_idxs[j // VLEN], debug_info)
 
-        slot = ("-", jump_load_pointer, jump_load_pointer, jump_layer_offsets + depth)
+        slot = ("-", jump_load_pointer, jump_load_pointer, jump_layer_offsets + depth - n_tree_preload_layers)
         after_add_jump_p = self.interleave_engine_fns(body, ("alu", slot), after_add_jump_p, debug_info)
 
         jump_load_data={
@@ -218,7 +218,7 @@ class KernelBuilder:
         slot = ("jump_indirect", jump_load_pointer)
         return self.interleave_engine_fns(body, ("flow", slot), after_add_jump_p, debug_info, jump_load_data=jump_load_data)
     
-    def build_apply_node_val_mem(self, body, i, inp_val_instr_idxs, inp_indices, inp_values, node_vals,  jump_load_pointer, in_mem_node_vals, jump_layer_offsets, round, depth, st, end, debug_info):
+    def build_apply_node_val_mem(self, body, i, inp_val_instr_idxs, inp_indices, inp_values, node_vals,  jump_load_pointer, in_mem_node_vals, jump_layer_offsets, round, depth, st, end, n_tree_preload_layers, debug_info):
         
         loads = [len(body)] * VLEN
 
@@ -228,16 +228,19 @@ class KernelBuilder:
 
         # load node values in node_vals
         for j in range(i,i+VLEN):
-            if round == 3 and st == 0 and j == 7:
-                loads[j-i] = self.build_scratch_jump_load(body, j, inp_val_instr_idxs, inp_indices, node_vals, jump_load_pointer, in_mem_node_vals, jump_layer_offsets, round, debug_info)
+            if round == 3 and st == 0 and j == 6:
+                loads[j-i] = self.build_scratch_jump_load(body, j, inp_val_instr_idxs, jump_load_pointer, inp_indices, node_vals, in_mem_node_vals, jump_layer_offsets, depth, n_tree_preload_layers, debug_info)
+                print("Instruction after jump load: ", loads[j-i])
+                print("All load instrs:", loads)
                 continue
-
+            # else:
             slots = ("load", node_vals + j, inp_indices + j)
             loads[j-i] = self.interleave_engine_fns(body, ("load", slots), inp_val_instr_idxs[i // VLEN], debug_info)
-            # last_loads.append(last_load)
+        # last_loads.append(last_load)
 
         # check node values indexed in mini (parallel) batch
-            self.interleave_engine_fns(body, ("debug", ("compare", node_vals + i, (round, st + i, "node_val"))), loads[j-i])
+        for j in range(i,i+VLEN):
+            self.interleave_engine_fns(body, ("debug", ("compare", node_vals + j, (round, st + j, "node_val"))), loads[j-i])
 
         # perform XOR with node values in parallel
         slots = ("^", inp_values + i, inp_values + i, node_vals + i)
@@ -287,6 +290,7 @@ class KernelBuilder:
             instr = body[i]
 
             if engine not in instr:
+                # given flow only has one slot, only need to hook into the no-instruction case
                 if slot[0] == "jump_indirect":
                     next_slot_is_eligible_for_jump = (i+1 == len(body) or "flow" not in body[i+1])
                     next_slot_is_eligible_for_load = (i+1 == len(body) or "alu" not in body[i+1] or len(body[i+1]["alu"]) + 1 <= SLOT_LIMITS["alu"])
@@ -298,6 +302,7 @@ class KernelBuilder:
                         after_load = self.interleave_engine_fns(body, ("alu", ("+", -1)), i+1, extra_info)
 
                         assert after_load == after_jump == i+2
+                        instr[engine] = [slot]
                         return i + 2
                     else:
                         continue
@@ -362,6 +367,7 @@ class KernelBuilder:
         
         # print("Full jumpy block instrs: ", jump_block_instrs)
         print("Instruction length without jump block:", len(body))
+        print("Jump block len:", len(jump_block_instrs))
         body.extend(jump_block_instrs)
         return body
 
@@ -541,7 +547,7 @@ class KernelBuilder:
         for i in range(n_jump_layers_enabled):
             abs_tree_layer = i + n_tree_preload_layers
 
-            slot = ("const", jump_layer_offsets + i, 2**abs_tree_layer - 1)
+            slot = ("const", jump_layer_offsets + i, (2**abs_tree_layer) - 1)
             after_jump_layer_load[i] = self.interleave_engine_fns(body, ("load", slot), 0)
 
             slot = ("+", jump_layer_offsets + i, jump_layer_offsets + i, self.scratch["forest_values_p"])
@@ -593,7 +599,7 @@ class KernelBuilder:
                 elif depth < n_tree_preload_layers:
                     inp_val_instr_idxs = self.build_apply_node_val_masked(body, i, inp_val_instr_idxs, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, forest_consts_vlen, consts_vlen, round, depth, chunk_len)
                 else:
-                    inp_val_instr_idxs = self.build_apply_node_val_mem(body, i, inp_val_instr_idxs, inp_indices, inp_values, node_vals, jump_load_pointer, in_mem_node_vals, jump_layer_offsets, round, depth, st, end, debug_info)
+                    inp_val_instr_idxs = self.build_apply_node_val_mem(body, i, inp_val_instr_idxs, inp_indices, inp_values, node_vals, jump_load_pointer, in_mem_node_vals, jump_layer_offsets, round, depth, st, end, n_tree_preload_layers, debug_info)
 
                 inp_val_instr_idxs = self.build_hash_opt(body, i, inp_val_instr_idxs, inp_values, tmp1_parallel, hash_consts_vlen, round, st, end, debug_info)
                 for j in range(i,i+VLEN):
@@ -647,8 +653,8 @@ class KernelBuilder:
         # Required to match with the yield in reference_kernel2
 
     def print_instructions(self):
-        for instr in self.instrs:
-            print(instr)
+        for i, instr in enumerate(self.instrs):
+            print(f"Instruction: {i} ", instr)
 
 BASELINE = 147734
 

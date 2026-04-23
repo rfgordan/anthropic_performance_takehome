@@ -331,6 +331,7 @@ class Machine:
                 core.pc = addr
             case ("jump_indirect", addr):
                 core.pc = core.scratch[addr]
+                print("INDIRECT JUMP TO: pointer ", addr, "pc: ", core.scratch[addr])
             case ("coreid", dest):
                 self.scratch_write[dest] = core.id
             case _:
