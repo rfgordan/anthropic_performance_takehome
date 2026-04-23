@@ -210,7 +210,7 @@ class KernelBuilder:
         jump_load_data={
             "dest" : node_vals + j,
             "st" : in_mem_node_vals + 2**depth - 1,
-            "n_vals" : in_mem_node_vals + 2**(depth + 1) - 1,
+            "end" : in_mem_node_vals + 2**(depth + 1) - 1,
         }
 
         # jump indirect will trigger reserving the next slot for a flow op
