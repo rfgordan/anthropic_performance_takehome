@@ -19,6 +19,7 @@ We recommend you look through problem.py next.
 from collections import defaultdict
 import random
 import unittest
+from dataclasses import dataclass
 
 from problem import (
     Engine,
@@ -35,6 +36,13 @@ from problem import (
     build_mem_image,
     reference_kernel2,
 )
+
+@dataclass
+class ScratchObjectWrapper:
+    addr: int
+    l: int
+    next_possible: list[int]
+    is_tracked_by_vlen: bool
 
 class KernelBuilder:
     def __init__(self):
@@ -70,6 +78,11 @@ class KernelBuilder:
         self.scratch_ptr += length
         assert self.scratch_ptr <= SCRATCH_SIZE, "Out of scratch space"
         return addr
+    
+    def create_wrapped_scratch_data(self, name=None, length=1, is_tracked_by_vlen=False):
+        addr = self.alloc_scratch(name, length)
+        next_possible = [0] * (length // (VLEN if is_tracked_by_vlen else 1))
+        return ScratchObjectWrapper(addr, length, next_possible, is_tracked_by_vlen)
 
     def scratch_const(self, val, name=None):
         if val not in self.const_map:
@@ -197,31 +210,34 @@ class KernelBuilder:
     def build_scratch_jump_load(self, body, j, inp_val_instr_idxs, jump_load_pointer, post_jump_load_offset, inp_indices, node_vals, in_mem_node_vals, jump_layer_offsets, depth, n_tree_preload_layers, debug_info):
 
         # after jumping, the instruction will set the jump pointer to the end of the block to enable the next jump load
-        slot = ("-", post_jump_load_offset, jump_layer_offsets + depth - n_tree_preload_layers + 1, inp_indices + j)
-        self.interleave_engine_fns(body, ("alu", slot), inp_val_instr_idxs[j // VLEN], debug_info)
+        slot = ("-", post_jump_load_offset.addr, jump_layer_offsets + depth - n_tree_preload_layers + 1, inp_indices + j)
+        self.interleave_engine_fns(body, ("alu", slot), max(inp_val_instr_idxs[j // VLEN], post_jump_load_offset.next_possible[0]), debug_info)
 
         # index to correct instruction within jump lock
-        slot = ("+", jump_load_pointer, jump_load_pointer, inp_indices + j)
-        after_add_jump_p = self.interleave_engine_fns(body, ("alu", slot), inp_val_instr_idxs[j // VLEN], debug_info)
+        slot = ("+", jump_load_pointer.addr, jump_load_pointer.addr, inp_indices + j)
+        after_add_jump_p = self.interleave_engine_fns(body, ("alu", slot), max(inp_val_instr_idxs[j // VLEN], jump_load_pointer.next_possible[0]), debug_info)
 
         # # zero out previous node val
         # slot = ("^", node_vals + j, node_vals + j, node_vals + j)
         # after_zero_node_val = self.interleave_engine_fns(body, ("alu", slot), inp_val_instr_idxs[j // VLEN], debug_info)
 
-        slot = ("-", jump_load_pointer, jump_load_pointer, jump_layer_offsets + depth - n_tree_preload_layers)
+        slot = ("-", jump_load_pointer.addr, jump_load_pointer.addr, jump_layer_offsets + depth - n_tree_preload_layers)
         after_add_jump_p = self.interleave_engine_fns(body, ("alu", slot), after_add_jump_p, debug_info)
 
         jump_load_data={
             "dest" : node_vals + j,
             "st" : in_mem_node_vals + 2**depth - 2**n_tree_preload_layers,
             "end" : in_mem_node_vals + 2**(depth + 1) - 2**n_tree_preload_layers,
-            "post_jump_load_offset" : post_jump_load_offset
+            "post_jump_load_offset" : post_jump_load_offset.addr
         }
 
         # jump indirect will trigger reserving the next slot for a flow op
         # can be synchronous with after_zero_node_val since its the jump-back instruction that loads to it
-        slot = ("jump_indirect", jump_load_pointer)
-        return self.interleave_engine_fns(body, ("flow", slot), after_add_jump_p, debug_info, jump_load_data=jump_load_data)
+        slot = ("jump_indirect", jump_load_pointer.addr)
+        after_jump_back = self.interleave_engine_fns(body, ("flow", slot), after_add_jump_p, debug_info, jump_load_data=jump_load_data)
+        jump_load_pointer.next_possible[0] = after_jump_back
+        post_jump_load_offset.next_possible[0] = after_jump_back
+        return after_jump_back
     
     def build_apply_node_val_mem(self, body, i, inp_val_instr_idxs, inp_indices, inp_values, node_vals, jump_load_pointer, post_jump_load_offset, in_mem_node_vals, jump_layer_offsets, round, depth, st, end, n_tree_preload_layers, n_jump_layers_enabled, debug_info):
         
@@ -234,7 +250,7 @@ class KernelBuilder:
         # load node values in node_vals
         for j in range(i,i+VLEN):
             # if depth == 3 and st == 0 and j == 2:
-            if depth in range(n_tree_preload_layers, n_tree_preload_layers + n_jump_layers_enabled) and st == 0 and j == 2:
+            if depth in range(n_tree_preload_layers, n_tree_preload_layers + n_jump_layers_enabled) and j - i == 2:
                 loads[j-i] = self.build_scratch_jump_load(body, j, inp_val_instr_idxs, jump_load_pointer, post_jump_load_offset, inp_indices, node_vals, in_mem_node_vals, jump_layer_offsets, depth, n_tree_preload_layers, debug_info)
                 print("Instruction after jump load: ", loads[j-i])
                 print("All load instrs:", loads)
@@ -365,7 +381,7 @@ class KernelBuilder:
         return len(body)
     
     # returns start of jump block
-    def expand_jump_load_instrs(self, body, post_jump_load_offset, zero_const):
+    def expand_jump_load_instrs(self, body, zero_const):
         jump_block_instrs = []
         num_prev_jump_expands = 0 # number of jumps that will be removed from the instr list
         for i, instr in enumerate(body):
@@ -430,8 +446,9 @@ class KernelBuilder:
         in_mem_node_vals = self.alloc_scratch("in_mem_node_vals", length=n_jump_nodes_enabled)
         jump_offsets = self.alloc_scratch("jump_offsets", length=n_jump_offsets)
         jump_layer_offsets = self.alloc_scratch("jump_layer_offsets", length=n_jump_layers_enabled + 1)
-        jump_load_pointer = self.alloc_scratch("jump_load_pointer")
-        post_jump_load_offset = self.alloc_scratch("post_jump_load_offset")
+        # jump_load_pointer = self.alloc_scratch("jump_load_pointer")
+        jump_load_pointer = self.create_wrapped_scratch_data("jump_load_pointer")
+        post_jump_load_offset = self.create_wrapped_scratch_data("post_jump_load_offset")
 
         # IN-MEMORY HELPERS
         consts_vlen = [self.alloc_scratch(f"const_{val}_vlen", length=VLEN) for val in range(n_tree_preload_vecs)] # can go back to -1?
@@ -575,8 +592,10 @@ class KernelBuilder:
             slot = ("+", jump_layer_offsets + i, jump_layer_offsets + i, self.scratch["forest_values_p"])
             after_jump_layer_load[i] = self.interleave_engine_fns(body, ("alu", slot), max(after_jump_layer_load[i], after_init_vars_instr))
 
-        slot = ("const", jump_load_pointer, last_non_jump_instr)
-        after_jump_pointer_setup = self.interleave_engine_fns(body, ("load", slot), 0)
+        slot = ("const", jump_load_pointer.addr, last_non_jump_instr)
+        after_jump_load_setup = self.interleave_engine_fns(body, ("load", slot), 0)
+        jump_load_pointer.next_possible[0] = after_jump_load_setup
+        # jump_load_pointer.next_possible[0] = self.interleave_engine_fns(body, ("load", slot), 0)
 
         # JUMP in-mem setup
         after_init_jump_offsets = [len(body)] * n_jump_offsets
@@ -682,11 +701,11 @@ class KernelBuilder:
         # self.instrs.append({"flow": [("pause",)]})
         self.interleave_engine_fns(body, ("flow", ("pause",)), len(body))
         # print(body)
-        jump_block_start = self.expand_jump_load_instrs(body, post_jump_load_offset, consts[0])
+        jump_block_start = self.expand_jump_load_instrs(body, consts[0])
 
-        load_slots = [slot for slot in body[after_jump_pointer_setup - 1]["load"] if slot[1] != jump_load_pointer]
-        load_slots.append(("const", jump_load_pointer, jump_block_start))
-        body[after_jump_pointer_setup - 1]["load"] = load_slots
+        load_slots = [slot for slot in body[after_jump_load_setup - 1]["load"] if slot[1] != jump_load_pointer.addr]
+        load_slots.append(("const", jump_load_pointer.addr, jump_block_start))
+        body[after_jump_load_setup - 1]["load"] = load_slots
 
         self.instrs.extend(body)
         # self.print_instructions()
