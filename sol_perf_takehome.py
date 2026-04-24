@@ -253,8 +253,8 @@ class KernelBuilder:
             # can be synchronous with after_zero_node_val since its the jump-back instruction that loads to it
             slot = ("jump_indirect", jump_load_pointer.addr)
             after_jump_back = self.interleave_engine_fns(body, ("flow", slot), after_add_jump_p, debug_info, jump_load_data=jump_load_data)
-            jump_load_pointer.update_last_write(0, after_jump_back - 1)
-            post_jump_load_offset.update_last_read(0, after_jump_back - 1)
+            jump_load_pointer.update_last_write(0, after_jump_back - 2)
+            post_jump_load_offset.update_last_read(0, after_jump_back - 2)
             loads[j-i] = after_jump_back
 
         # check node values indexed in mini (parallel) batch
@@ -337,8 +337,9 @@ class KernelBuilder:
                 # given flow only has one slot, only need to hook into the no-instruction case
                 if slot[0] == "jump_indirect":
                     next_slot_is_eligible_for_jump = (i+1 == len(body) or "flow" not in body[i+1])
-                    next_slot_is_eligible_for_load = (i+1 == len(body) or "alu" not in body[i+1] or len(body[i+1]["alu"]) + 2 <= SLOT_LIMITS["alu"])
-                    if next_slot_is_eligible_for_jump and next_slot_is_eligible_for_load:
+                    this_slot_is_eligible_for_mod = ("alu" not in body[i] or len(body[i]["alu"]) + 1 <= SLOT_LIMITS["alu"])
+                    next_slot_is_eligible_for_load = (i+1 == len(body) or "alu" not in body[i+1] or len(body[i+1]["alu"]) + 1 <= SLOT_LIMITS["alu"])
+                    if next_slot_is_eligible_for_jump and next_slot_is_eligible_for_load and this_slot_is_eligible_for_mod:
                         self.reserved_jump_instr_idxs[i+1] = jump_load_data
                         # print(self.reserved_jump_instr_idxs)
 
@@ -347,9 +348,10 @@ class KernelBuilder:
                         # reserve space for node val load
                         after_load = self.interleave_engine_fns(body, ("alu", ("+", -1)), i+1, extra_info)
                         # reserve space to update post_jump_load_offset
-                        after_load2 = self.interleave_engine_fns(body, ("alu", ("+", slot[1], slot[1], jump_load_data["post_jump_load_offset"])), i+1, extra_info)
+                        after_mod = self.interleave_engine_fns(body, ("alu", ("+", slot[1], slot[1], jump_load_data["post_jump_load_offset"])), i, extra_info)
 
-                        assert after_load == after_jump == after_load2 == i+2
+                        assert after_mod == i+1
+                        assert after_load == after_jump == i+2
                         instr[engine] = [slot]
                         return i + 2
                     else:
@@ -396,9 +398,10 @@ class KernelBuilder:
             # reserve space for node val load
             after_load = self.interleave_engine_fns(body, ("alu", ("+", -1)), post_jump_idx, extra_info)
             # reserve space to update post_jump_load_offset
-            after_load2 = self.interleave_engine_fns(body, ("alu", ("+", slot[1], slot[1], jump_load_data["post_jump_load_offset"])), post_jump_idx, extra_info)
+            after_mod = self.interleave_engine_fns(body, ("alu", ("+", slot[1], slot[1], jump_load_data["post_jump_load_offset"])), post_jump_idx - 1, extra_info)
 
-            assert after_load == after_jump == after_load2 == post_jump_idx+1
+            assert after_mod == post_jump_idx
+            assert after_load == after_jump == post_jump_idx+1
             return post_jump_idx+1
         return len(body)
     
