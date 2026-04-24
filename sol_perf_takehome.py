@@ -44,7 +44,7 @@ class ScratchObjectWrapper:
     last_reads: list[int]
     last_writes: list[int]
     is_tracked_by_vlen: bool
-    
+
     def get_next_read(self, i):
         return self.last_writes[i] + 1
     
@@ -52,10 +52,10 @@ class ScratchObjectWrapper:
     def get_next_write(self, i):
         return self.last_reads[i]
     
-    def update_last_reads(self, i, val):
+    def update_last_read(self, i, val):
         self.last_reads[i] = val
     
-    def update_last_writes(self, i, val):
+    def update_last_write(self, i, val):
         self.last_writes[i] = val
 
 class KernelBuilder:
@@ -95,8 +95,9 @@ class KernelBuilder:
     
     def create_wrapped_scratch_data(self, name=None, length=1, is_tracked_by_vlen=False):
         addr = self.alloc_scratch(name, length)
-        next_possible = [0] * (length // (VLEN if is_tracked_by_vlen else 1))
-        return ScratchObjectWrapper(addr, length, next_possible, is_tracked_by_vlen)
+        last_reads = [0] * (length // (VLEN if is_tracked_by_vlen else 1))
+        last_writes = [0] * (length // (VLEN if is_tracked_by_vlen else 1))
+        return ScratchObjectWrapper(addr, length, last_reads, last_writes, is_tracked_by_vlen)
 
     def scratch_const(self, val, name=None):
         if val not in self.const_map:
@@ -221,18 +222,18 @@ class KernelBuilder:
 
         return inp_val_instr_idxs
     
-    def build_scratch_jump_load(self, body, i, inp_val_instr_idxs, jump_load_pointer, post_jump_load_offset, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, round, depth, st, n_tree_preload_layers, debug_info):
+    def build_scratch_jump_load(self, body, i, inp_val_instr_idxs, jump_load_pointer : ScratchObjectWrapper, post_jump_load_offset : ScratchObjectWrapper, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, round, depth, st, n_tree_preload_layers, debug_info):
         
         loads = [len(body)] * VLEN
         for j in range(i,i+VLEN):
 
             # after jumping, the instruction will set the jump pointer to the end of the block to enable the next jump load
             slot = ("-", post_jump_load_offset.addr, jump_layer_offsets + depth - n_tree_preload_layers + 1, inp_indices + j)
-            self.interleave_engine_fns(body, ("alu", slot), max(inp_val_instr_idxs[i // VLEN], post_jump_load_offset.next_possible[0]), debug_info)
+            self.interleave_engine_fns(body, ("alu", slot), max(inp_val_instr_idxs[i // VLEN], post_jump_load_offset.get_next_write(0)), debug_info)
 
             # index to correct instruction within jump lock
             slot = ("+", jump_load_pointer.addr, jump_load_pointer.addr, inp_indices + j)
-            after_add_jump_p = self.interleave_engine_fns(body, ("alu", slot), max(inp_val_instr_idxs[i // VLEN], jump_load_pointer.next_possible[0]), debug_info)
+            after_add_jump_p = self.interleave_engine_fns(body, ("alu", slot), max(inp_val_instr_idxs[i // VLEN], jump_load_pointer.get_next_write(0), jump_load_pointer.get_next_read(0)), debug_info)
 
             # # zero out previous node val
             # slot = ("^", node_vals + j, node_vals + j, node_vals + j)
@@ -252,8 +253,8 @@ class KernelBuilder:
             # can be synchronous with after_zero_node_val since its the jump-back instruction that loads to it
             slot = ("jump_indirect", jump_load_pointer.addr)
             after_jump_back = self.interleave_engine_fns(body, ("flow", slot), after_add_jump_p, debug_info, jump_load_data=jump_load_data)
-            jump_load_pointer.next_possible[0] = after_jump_back
-            post_jump_load_offset.next_possible[0] = after_jump_back
+            jump_load_pointer.update_last_write(0, after_jump_back - 1)
+            post_jump_load_offset.update_last_read(0, after_jump_back - 1)
             loads[j-i] = after_jump_back
 
         # check node values indexed in mini (parallel) batch
@@ -615,7 +616,7 @@ class KernelBuilder:
 
         slot = ("const", jump_load_pointer.addr, last_non_jump_instr)
         after_jump_load_setup = self.interleave_engine_fns(body, ("load", slot), 0)
-        jump_load_pointer.next_possible[0] = after_jump_load_setup
+        jump_load_pointer.update_last_write(0, after_jump_load_setup-1)
         # jump_load_pointer.next_possible[0] = self.interleave_engine_fns(body, ("load", slot), 0)
 
         # JUMP in-mem setup
