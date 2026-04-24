@@ -41,8 +41,22 @@ from problem import (
 class ScratchObjectWrapper:
     addr: int
     l: int
-    next_possible: list[int]
+    last_reads: list[int]
+    last_writes: list[int]
     is_tracked_by_vlen: bool
+    
+    def get_next_read(self, i):
+        return self.last_writes[i] + 1
+    
+    # writes can be simultaneous with reads
+    def get_next_write(self, i):
+        return self.last_reads[i]
+    
+    def update_last_reads(self, i, val):
+        self.last_reads[i] = val
+    
+    def update_last_writes(self, i, val):
+        self.last_writes[i] = val
 
 class KernelBuilder:
     def __init__(self):
