@@ -331,21 +331,77 @@ class KernelBuilder:
 
     # @staticmethod
     # def is_valid_1x_valu_expansion(body, i):
+    def _get_n_slots(self, body, i, engine, simulated_slot_counts):
+
+        slot_count = 0
+        if simulated_slot_counts is not None and i in simulated_slot_counts and engine in simulated_slot_counts[i]:
+            slot_count += simulated_slot_counts[i][engine]
+
+        if i < len(body) and engine in body[i]:
+            slot_count += len(body[i][engine]) 
+
+        return slot_count
 
     def interleave_engine_fns(self, body, slot, first_possible=None, extra_info={}, should_pack_valu=True, jump_load_data={}, simulate_only=False, simulated_slot_counts=None):
         engine, slot = slot
         slot = slot + (extra_info,)
         first_possible = len(body) if first_possible is None else first_possible
         
-        for i in range(first_possible, len(body)):
-            instr = body[i]
+        i = first_possible
+        while True:
+            if i >= len(body):
+                instr = defaultdict(list)
+                body.append(instr)
+            else:
+                instr = body[i]
 
-            if engine not in instr:
-                # given flow only has one slot, only need to hook into the no-instruction case
+            # if engine not in instr:
+            #     # given flow only has one slot, only need to hook into the no-instruction case
+            #     if slot[0] == "jump_indirect":
+            #         # next_slot_is_eligible_for_jump = (i+1 == len(body) or "flow" not in body[i+1])
+            #         # this_slot_is_eligible_for_mod = (len(body[i]["alu"]) + 1 <= SLOT_LIMITS["alu"])
+            #         # next_slot_is_eligible_for_load = (i+1 == len(body) or len(body[i+1]["alu"]) + 1 <= SLOT_LIMITS["alu"])
+            #         next_slot_is_eligible_for_load = self._get_n_slots(body,i+1,"alu",simulated_slot_counts) + 1 <= SLOT_LIMITS["alu"]
+            #         this_slot_is_eligible_for_mod = self._get_n_slots(body,i,"alu", simulated_slot_counts) + 1 <= SLOT_LIMITS["alu"]
+            #         next_slot_is_eligible_for_jump = self._get_n_slots(body, i+1, "flow", simulated_slot_counts) + 1 <= SLOT_LIMITS["flow"]
+            #         if next_slot_is_eligible_for_jump and next_slot_is_eligible_for_load and this_slot_is_eligible_for_mod:
+
+            #             if simulate_only:
+            #                 return i+2
+                        
+            #             self.reserved_jump_instr_idxs[i+1] = jump_load_data
+            #             # print(self.reserved_jump_instr_idxs)
+
+            #             # reserve space for jump back to main instruction sequence
+            #             after_jump = self.interleave_engine_fns(body, ("flow", ("jump", i+1)), i+1, extra_info)
+            #             # reserve space for node val load
+            #             after_load = self.interleave_engine_fns(body, ("alu", ("+", -1)), i+1, extra_info)
+            #             # reserve space to update post_jump_load_offset
+            #             after_mod = self.interleave_engine_fns(body, ("alu", ("+", slot[1], slot[1], jump_load_data["post_jump_load_offset"])), i, extra_info)
+
+            #             assert after_mod == i+1
+            #             assert after_load == after_jump == i+2
+            #             instr[engine] = [slot]
+            #             return i + 2
+            #         else:
+            #             continue
+
+            #     if simulate_only:
+            #         return i+1
+                
+            #     instr[engine] = [slot]
+            #     return i + 1
+            
+            if self._get_n_slots(body, i, engine, simulated_slot_counts) < SLOT_LIMITS[engine]:
+                # print("normal path")
                 if slot[0] == "jump_indirect":
-                    next_slot_is_eligible_for_jump = (i+1 == len(body) or "flow" not in body[i+1])
-                    this_slot_is_eligible_for_mod = ("alu" not in body[i] or len(body[i]["alu"]) + 1 <= SLOT_LIMITS["alu"])
-                    next_slot_is_eligible_for_load = (i+1 == len(body) or "alu" not in body[i+1] or len(body[i+1]["alu"]) + 1 <= SLOT_LIMITS["alu"])
+                    # next_slot_is_eligible_for_jump = (i+1 == len(body) or "flow" not in body[i+1])
+                    # this_slot_is_eligible_for_mod = (len(body[i]["alu"]) + 1 <= SLOT_LIMITS["alu"])
+                    # next_slot_is_eligible_for_load = (i+1 == len(body) or len(body[i+1]["alu"]) + 1 <= SLOT_LIMITS["alu"])
+                    next_slot_is_eligible_for_load = self._get_n_slots(body,i+1,"alu",simulated_slot_counts) + 1 <= SLOT_LIMITS["alu"]
+                    this_slot_is_eligible_for_mod = self._get_n_slots(body,i,"alu", simulated_slot_counts) + 1 <= SLOT_LIMITS["alu"]
+                    next_slot_is_eligible_for_jump = self._get_n_slots(body, i+1, "flow", simulated_slot_counts) + 1 <= SLOT_LIMITS["flow"]
+                    print("jump booleans: ", next_slot_is_eligible_for_load, this_slot_is_eligible_for_mod, next_slot_is_eligible_for_jump)
                     if next_slot_is_eligible_for_jump and next_slot_is_eligible_for_load and this_slot_is_eligible_for_mod:
 
                         if simulate_only:
@@ -366,28 +422,24 @@ class KernelBuilder:
                         instr[engine] = [slot]
                         return i + 2
                     else:
+                        i+=1
                         continue
-
-                if simulate_only:
-                    return i+1
-                
-                instr[engine] = [slot]
-                return i + 1
             
-            if len(instr[engine]) < SLOT_LIMITS[engine]:
                 if simulate_only:
                     return i+1
                 
                 instr[engine].append(slot)
                 return i + 1
-            
+
+            # print("how on earth..", self._get_n_slots(body, i, engine, simulated_slot_counts), "engine:", engine)
             if should_pack_valu and engine == "valu" and slot[0] not in ("vbroadcast", "multiply_add"):
 
-                if "alu" not in instr:
-                    instr["alu"] = []
+                # if "alu" not in instr:
+                #     instr["alu"] = []
 
                 # shift whole slot into alu engine
-                if len(instr["alu"]) + VLEN <= SLOT_LIMITS["alu"]:
+                current_n_slots_alu = self._get_n_slots(body, i, "alu", simulated_slot_counts)
+                if current_n_slots_alu + VLEN <= SLOT_LIMITS["alu"]:
                     if simulate_only:
                         return i+1
 
@@ -395,9 +447,9 @@ class KernelBuilder:
                     instr["alu"].extend(slots)
                     return i + 1
                 
-                next_slot_is_eligible = i+1==len(body) or "alu" not in body[i+1] or len(body[i+1]["alu"]) + VLEN // 2 <= SLOT_LIMITS["alu"]
+                next_slot_is_eligible = self._get_n_slots(body, i+1, "alu", simulated_slot_counts) + VLEN // 2 <= SLOT_LIMITS["alu"]
                 # shift slot half into current instruction, half into next
-                if len(instr["alu"]) + VLEN // 2 <= SLOT_LIMITS["alu"] and next_slot_is_eligible:
+                if current_n_slots_alu + VLEN // 2 <= SLOT_LIMITS["alu"] and next_slot_is_eligible:
                     if simulate_only:
                         return i+2
                     
@@ -406,37 +458,45 @@ class KernelBuilder:
                     slots_second = slots[VLEN // 2:]
                     instr["alu"].extend(slots_first)
                     for slot_second in slots_second:
-                        self.interleave_engine_fns(body, ("alu", slot_second[:-1]), i+1, extra_info)
+                        print("entering alu split..")
+                        self.interleave_engine_fns(body, ("alu", slot_second[:-1]), i+1, extra_info, simulated_slot_counts=simulated_slot_counts)
 
+                    print("finished alu split..")
                     return i+2
+                
+            print("spinning wheee...")
+            i+=1
 
-        if slot[0] == "jump_indirect":
-            if simulate_only:
-                return len(body) + 2
+        assert False, "should always append an instruction within the loop"
+        # if slot[0] == "jump_indirect":
+        #     if simulate_only:
+        #         return len(body) + 2
             
-            body.append({engine: [slot]})
-            post_jump_idx = len(body)
+        #     instr = defaultdict(list)
+        #     instr[engine].append(slot)
+        #     body.append(instr)
+        #     post_jump_idx = len(body)
 
-            self.reserved_jump_instr_idxs[post_jump_idx] = jump_load_data
-            print(self.reserved_jump_instr_idxs)
+        #     self.reserved_jump_instr_idxs[post_jump_idx] = jump_load_data
+        #     print(self.reserved_jump_instr_idxs)
 
-            # reserve space for jump back to main instruction sequence
-            after_jump = self.interleave_engine_fns(body, ("flow", ("jump", post_jump_idx)), post_jump_idx, extra_info)
-            # reserve space for node val load
-            after_load = self.interleave_engine_fns(body, ("alu", ("+", -1)), post_jump_idx, extra_info)
-            # reserve space to update post_jump_load_offset
-            after_mod = self.interleave_engine_fns(body, ("alu", ("+", slot[1], slot[1], jump_load_data["post_jump_load_offset"])), post_jump_idx - 1, extra_info)
+        #     # reserve space for jump back to main instruction sequence
+        #     after_jump = self.interleave_engine_fns(body, ("flow", ("jump", post_jump_idx)), post_jump_idx, extra_info)
+        #     # reserve space for node val load
+        #     after_load = self.interleave_engine_fns(body, ("alu", ("+", -1)), post_jump_idx, extra_info)
+        #     # reserve space to update post_jump_load_offset
+        #     after_mod = self.interleave_engine_fns(body, ("alu", ("+", slot[1], slot[1], jump_load_data["post_jump_load_offset"])), post_jump_idx - 1, extra_info)
 
-            assert after_mod == post_jump_idx
-            assert after_load == after_jump == post_jump_idx+1
-            return post_jump_idx+1
+        #     assert after_mod == post_jump_idx
+        #     assert after_load == after_jump == post_jump_idx+1
+        #     return post_jump_idx+1
         
-        if simulate_only:
-            return len(body) + 1
+        # if simulate_only:
+        #     return len(body) + 1
         
-        instr = defaultdict(list)
-        instr[engine].append(slot)
-        body.append(instr)
+        # instr = defaultdict(list)
+        # instr[engine].append(slot)
+        # body.append(instr)
         return len(body)
     
     # returns start of jump block
@@ -700,6 +760,7 @@ class KernelBuilder:
                 return should_jump_load
             
             def process_vector(round, i, inp_val_instr_idxs):
+                print("enter process vector..")
                 debug_info = {"round": round, "st": st, "i": i}
                 depth = round % (forest_height + 1)
 
@@ -716,6 +777,7 @@ class KernelBuilder:
 
                     inp_val_instr_idxs[i // VLEN] = max(next_instr_idxs[i // VLEN], inp_val_instr_idxs[i // VLEN])
 
+                print("enter debug vector..")
                 # check input indices / values indexed in full batch
                 for j in range(i,i+VLEN):
                     self.interleave_engine_fns(body, ("debug", ("compare", inp_indices + j, (round, st + j, "idx"))), inp_val_instr_idxs[i // VLEN])
@@ -726,6 +788,7 @@ class KernelBuilder:
                 elif depth < n_tree_preload_layers:
                     inp_val_instr_idxs = self.build_apply_node_val_masked(body, i, inp_val_instr_idxs, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, forest_consts_vlen, consts_vlen, round, depth, chunk_len)
                 else:
+                    print("enter mem routing..")
                     jump_load_pointer_copy = copy.deepcopy(jump_load_pointer)
                     post_jump_load_offset_copy = copy.deepcopy(post_jump_load_offset)
                     jump_res_instr_idx = self.build_scratch_jump_load(body, i, inp_val_instr_idxs, jump_load_pointer_copy, post_jump_load_offset_copy, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, round, depth, st, n_tree_preload_layers, debug_info, simulate_only=True)
