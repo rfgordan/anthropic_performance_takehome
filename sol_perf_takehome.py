@@ -686,8 +686,8 @@ class KernelBuilder:
             def should_route_vector_to_jump_load(jump_res_instr_idx, mem_res_instr_idx, i, round, depth, n_tree_preload_layers, n_jump_layers_enabled):
                 nonlocal total_routed_count, jump_loaded_count
                 can_jump_load = n_tree_preload_layers <= depth < n_jump_layers_enabled
-                # should_jump_load = can_jump_load and jump_loaded_count < total_routed_count // jump_load_every_n
-                should_jump_load = can_jump_load and jump_res_instr_idx < mem_res_instr_idx
+                should_jump_load = can_jump_load and jump_loaded_count < total_routed_count // jump_load_every_n
+                # should_jump_load = can_jump_load and jump_res_instr_idx < mem_res_instr_idx
                 total_routed_count += 1
                 jump_loaded_count += int(should_jump_load)
                 # print("Routing total count: ", total_routed_count, " jump loaded count: ", jump_loaded_count, " decision:", should_jump_load)
