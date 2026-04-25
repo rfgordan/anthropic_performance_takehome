@@ -223,25 +223,26 @@ class KernelBuilder:
 
         return inp_val_instr_idxs
     
-    def build_scratch_jump_load(self, body, i, inp_val_instr_idxs, jump_load_pointer : ScratchObjectWrapper, post_jump_load_offset : ScratchObjectWrapper, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, round, depth, st, n_tree_preload_layers, debug_info, simulate_only=False):
+    def build_scratch_jump_load(self, body, i, inp_val_instr_idxs, jump_load_pointer : ScratchObjectWrapper, post_jump_load_offset : ScratchObjectWrapper, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, round, depth, st, n_tree_preload_layers, debug_info, simulate_only=False, simulated_slot_counts=None):
         
+        # print("Simulate: ", simulate_only, "simulate slot counts:", simulated_slot_counts)
         loads = [len(body)] * VLEN
         for j in range(i,i+VLEN):
 
             # after jumping, the instruction will set the jump pointer to the end of the block to enable the next jump load
             slot = ("-", post_jump_load_offset.addr, jump_layer_offsets + depth - n_tree_preload_layers + 1, inp_indices + j)
-            self.interleave_engine_fns(body, ("alu", slot), max(inp_val_instr_idxs[i // VLEN], post_jump_load_offset.get_next_write(0)), debug_info, simulate_only=simulate_only)
+            self.interleave_engine_fns(body, ("alu", slot), max(inp_val_instr_idxs[i // VLEN], post_jump_load_offset.get_next_write(0)), debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
 
             # index to correct instruction within jump lock
             slot = ("+", jump_load_pointer.addr, jump_load_pointer.addr, inp_indices + j)
-            after_add_jump_p = self.interleave_engine_fns(body, ("alu", slot), max(inp_val_instr_idxs[i // VLEN], jump_load_pointer.get_next_write(0), jump_load_pointer.get_next_read(0)), debug_info, simulate_only=simulate_only)
+            after_add_jump_p = self.interleave_engine_fns(body, ("alu", slot), max(inp_val_instr_idxs[i // VLEN], jump_load_pointer.get_next_write(0), jump_load_pointer.get_next_read(0)), debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
 
             # # zero out previous node val
             # slot = ("^", node_vals + j, node_vals + j, node_vals + j)
             # after_zero_node_val = self.interleave_engine_fns(body, ("alu", slot), inp_val_instr_idxs[j // VLEN], debug_info)
 
             slot = ("-", jump_load_pointer.addr, jump_load_pointer.addr, jump_layer_offsets + depth - n_tree_preload_layers)
-            after_add_jump_p = self.interleave_engine_fns(body, ("alu", slot), after_add_jump_p, debug_info, simulate_only=simulate_only)
+            after_add_jump_p = self.interleave_engine_fns(body, ("alu", slot), after_add_jump_p, debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
 
             jump_load_data={
                 "dest" : node_vals + j,
@@ -253,26 +254,28 @@ class KernelBuilder:
             # jump indirect will trigger reserving the next slot for a flow op
             # can be synchronous with after_zero_node_val since its the jump-back instruction that loads to it
             slot = ("jump_indirect", jump_load_pointer.addr)
-            after_jump_back = self.interleave_engine_fns(body, ("flow", slot), after_add_jump_p, debug_info, jump_load_data=jump_load_data, simulate_only=simulate_only)
+            after_jump_back = self.interleave_engine_fns(body, ("flow", slot), after_add_jump_p, debug_info, jump_load_data=jump_load_data, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
             jump_load_pointer.update_last_write(0, after_jump_back - 2)
             post_jump_load_offset.update_last_read(0, after_jump_back - 2)
             loads[j-i] = after_jump_back
 
         # check node values indexed in mini (parallel) batch
         for j in range(i,i+VLEN):
-            self.interleave_engine_fns(body, ("debug", ("compare", node_vals + j, (round, st + j, "node_val"))), loads[j-i], simulate_only=simulate_only)
+            self.interleave_engine_fns(body, ("debug", ("compare", node_vals + j, (round, st + j, "node_val"))), loads[j-i], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
 
         # perform XOR with node values in parallel
         slots = ("^", inp_values + i, inp_values + i, node_vals + i)
-        res_instr_idx = self.interleave_engine_fns(body, ("valu", slots), max(loads), simulate_only=simulate_only)
+        res_instr_idx = self.interleave_engine_fns(body, ("valu", slots), max(loads), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
 
         if not simulate_only:
             inp_val_instr_idxs[i // VLEN] = res_instr_idx
 
         return res_instr_idx
     
-    def build_apply_node_val_mem(self, body, i, inp_val_instr_idxs, inp_indices, inp_values, node_vals, round, st, debug_info, simulate_only=False):
+    def build_apply_node_val_mem(self, body, i, inp_val_instr_idxs, inp_indices, inp_values, node_vals, round, st, debug_info, simulate_only=False, simulated_slot_counts=None):
         
+        # print("Mem Simulate: ", simulate_only, "simulate slot counts:", simulated_slot_counts)
+
         loads = [len(body)] * VLEN
 
         # for i in range(0, end - st, VLEN):
@@ -282,17 +285,17 @@ class KernelBuilder:
         # load node values in node_vals
         for j in range(i,i+VLEN):
             slots = ("load", node_vals + j, inp_indices + j)
-            loads[j-i] = self.interleave_engine_fns(body, ("load", slots), inp_val_instr_idxs[i // VLEN], debug_info, simulate_only=simulate_only)
+            loads[j-i] = self.interleave_engine_fns(body, ("load", slots), inp_val_instr_idxs[i // VLEN], debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
 
         # last_loads.append(last_load)
 
         # check node values indexed in mini (parallel) batch
         for j in range(i,i+VLEN):
-            self.interleave_engine_fns(body, ("debug", ("compare", node_vals + j, (round, st + j, "node_val"))), loads[j-i], simulate_only=simulate_only)
+            self.interleave_engine_fns(body, ("debug", ("compare", node_vals + j, (round, st + j, "node_val"))), loads[j-i], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
 
         # perform XOR with node values in parallel
         slots = ("^", inp_values + i, inp_values + i, node_vals + i)
-        res_instr_idx = self.interleave_engine_fns(body, ("valu", slots), max(loads), simulate_only=simulate_only)
+        res_instr_idx = self.interleave_engine_fns(body, ("valu", slots), max(loads), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
         
         if not simulate_only:
             inp_val_instr_idxs[i // VLEN] = res_instr_idx
@@ -363,6 +366,10 @@ class KernelBuilder:
                     if next_slot_is_eligible_for_jump and next_slot_is_eligible_for_load and this_slot_is_eligible_for_mod:
 
                         if simulate_only:
+                            simulated_slot_counts[i]["flow"] += 1
+                            simulated_slot_counts[i+1]["flow"] += 1
+                            simulated_slot_counts[i]["alu"] += 1
+                            simulated_slot_counts[i+1]["alu"] += 1
                             return i+2
                         
                         self.reserved_jump_instr_idxs[i+1] = jump_load_data
@@ -384,6 +391,7 @@ class KernelBuilder:
                         continue
             
                 if simulate_only:
+                    simulated_slot_counts[i][engine] += 1
                     return i+1
                 
                 instr[engine].append(slot)
@@ -395,6 +403,7 @@ class KernelBuilder:
                 current_n_slots_alu = self._get_n_slots(body, i, "alu", simulated_slot_counts)
                 if current_n_slots_alu + VLEN <= SLOT_LIMITS["alu"]:
                     if simulate_only:
+                        simulated_slot_counts[i][engine] += VLEN
                         return i+1
 
                     slots = KernelBuilder.valu_slot_to_alu_slot(slot)
@@ -404,16 +413,19 @@ class KernelBuilder:
                 next_slot_is_eligible = self._get_n_slots(body, i+1, "alu", simulated_slot_counts) + VLEN // 2 <= SLOT_LIMITS["alu"]
                 # shift slot half into current instruction, half into next
                 if current_n_slots_alu + VLEN // 2 <= SLOT_LIMITS["alu"] and next_slot_is_eligible:
-                    if simulate_only:
-                        return i+2
                     
                     slots = KernelBuilder.valu_slot_to_alu_slot(slot)
                     slots_first = slots[:VLEN // 2]
                     slots_second = slots[VLEN // 2:]
-                    instr["alu"].extend(slots_first)
-                    for slot_second in slots_second:
-                        self.interleave_engine_fns(body, ("alu", slot_second[:-1]), i+1, extra_info, simulated_slot_counts=simulated_slot_counts)
 
+                    for slot_second in slots_second:
+                        self.interleave_engine_fns(body, ("alu", slot_second[:-1]), i+1, extra_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+
+                    if simulate_only:
+                        simulated_slot_counts[i][engine] += VLEN // 2
+                        return i+2
+                    
+                    instr["alu"].extend(slots_first)
                     return i+2
                 
             i+=1
@@ -682,7 +694,6 @@ class KernelBuilder:
                 return should_jump_load
             
             def process_vector(round, i, inp_val_instr_idxs):
-                print("enter process vector..")
                 debug_info = {"round": round, "st": st, "i": i}
                 depth = round % (forest_height + 1)
 
@@ -699,7 +710,6 @@ class KernelBuilder:
 
                     inp_val_instr_idxs[i // VLEN] = max(next_instr_idxs[i // VLEN], inp_val_instr_idxs[i // VLEN])
 
-                print("enter debug vector..")
                 # check input indices / values indexed in full batch
                 for j in range(i,i+VLEN):
                     self.interleave_engine_fns(body, ("debug", ("compare", inp_indices + j, (round, st + j, "idx"))), inp_val_instr_idxs[i // VLEN])
@@ -710,20 +720,23 @@ class KernelBuilder:
                 elif depth < n_tree_preload_layers:
                     inp_val_instr_idxs = self.build_apply_node_val_masked(body, i, inp_val_instr_idxs, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, forest_consts_vlen, consts_vlen, round, depth, chunk_len)
                 else:
-                    print("enter mem routing..")
                     jump_load_pointer_copy = copy.deepcopy(jump_load_pointer)
                     post_jump_load_offset_copy = copy.deepcopy(post_jump_load_offset)
-                    jump_res_instr_idx = self.build_scratch_jump_load(body, i, inp_val_instr_idxs, jump_load_pointer_copy, post_jump_load_offset_copy, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, round, depth, st, n_tree_preload_layers, debug_info, simulate_only=True)
-                    mem_res_instr_idx = self.build_apply_node_val_mem(body, i, inp_val_instr_idxs, inp_indices, inp_values, node_vals, round, st, debug_info, simulate_only=True)
-                    # jump_res_instr_idx = 0
+                    simulated_counts_jump = defaultdict(lambda: defaultdict(int))
+                    jump_res_instr_idx = self.build_scratch_jump_load(body, i, inp_val_instr_idxs, jump_load_pointer_copy, post_jump_load_offset_copy, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, round, depth, st, n_tree_preload_layers, debug_info, simulate_only=True, simulated_slot_counts=simulated_counts_jump)
+                    simulated_counts_mem = defaultdict(lambda: defaultdict(int))
+                    mem_res_instr_idx = self.build_apply_node_val_mem(body, i, inp_val_instr_idxs, inp_indices, inp_values, node_vals, round, st, debug_info, simulate_only=True, simulated_slot_counts=simulated_counts_mem)
+                    # jump_res_instr_idx = 325454
                     # mem_res_instr_idx = 0
  
                     b = should_route_vector_to_jump_load(jump_res_instr_idx, mem_res_instr_idx, i, round, depth, n_tree_preload_layers, n_jump_layers_enabled)
                     if b:
-                        self.build_scratch_jump_load(body, i, inp_val_instr_idxs, jump_load_pointer, post_jump_load_offset, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, round, depth, st, n_tree_preload_layers, debug_info, simulate_only=False)
+                        res_idx = self.build_scratch_jump_load(body, i, inp_val_instr_idxs, jump_load_pointer, post_jump_load_offset, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, round, depth, st, n_tree_preload_layers, debug_info, simulate_only=False)
+                        print("routed to jump. expected idx: ", jump_res_instr_idx, " actual: ", res_idx)
                     else:
-                        self.build_apply_node_val_mem(body, i, inp_val_instr_idxs, inp_indices, inp_values, node_vals, round, st, debug_info, simulate_only=False)
-                    print("routing vector load to jump: ", b, " jump res idx: ", jump_res_instr_idx, " mem_res_instr_idx: ", mem_res_instr_idx)
+                        res_idx = self.build_apply_node_val_mem(body, i, inp_val_instr_idxs, inp_indices, inp_values, node_vals, round, st, debug_info, simulate_only=False)
+                        print("routed to mem. expected idx: ", mem_res_instr_idx, " actual: ", res_idx)
+                    # print("routing vector load to jump: ", b, " jump res idx: ", jump_res_instr_idx, " mem_res_instr_idx: ", mem_res_instr_idx)
 
                 inp_val_instr_idxs = self.build_hash_opt(body, i, inp_val_instr_idxs, inp_values, tmp1_parallel, hash_consts_vlen, round, st, end, debug_info)
                 for j in range(i,i+VLEN):
