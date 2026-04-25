@@ -20,6 +20,7 @@ from collections import defaultdict
 import random
 import unittest
 from dataclasses import dataclass
+import copy
 
 from problem import (
     Engine,
@@ -253,9 +254,8 @@ class KernelBuilder:
             # can be synchronous with after_zero_node_val since its the jump-back instruction that loads to it
             slot = ("jump_indirect", jump_load_pointer.addr)
             after_jump_back = self.interleave_engine_fns(body, ("flow", slot), after_add_jump_p, debug_info, jump_load_data=jump_load_data, simulate_only=simulate_only)
-            if not simulate_only:
-                jump_load_pointer.update_last_write(0, after_jump_back - 2)
-                post_jump_load_offset.update_last_read(0, after_jump_back - 2)
+            jump_load_pointer.update_last_write(0, after_jump_back - 2)
+            post_jump_load_offset.update_last_read(0, after_jump_back - 2)
             loads[j-i] = after_jump_back
 
         # check node values indexed in mini (parallel) batch
@@ -265,6 +265,7 @@ class KernelBuilder:
         # perform XOR with node values in parallel
         slots = ("^", inp_values + i, inp_values + i, node_vals + i)
         res_instr_idx = self.interleave_engine_fns(body, ("valu", slots), max(loads), simulate_only=simulate_only)
+
         if not simulate_only:
             inp_val_instr_idxs[i // VLEN] = res_instr_idx
 
@@ -331,7 +332,7 @@ class KernelBuilder:
     # @staticmethod
     # def is_valid_1x_valu_expansion(body, i):
 
-    def interleave_engine_fns(self, body, slot, first_possible=None, extra_info={}, should_pack_valu=True, jump_load_data={}, simulate_only=False):
+    def interleave_engine_fns(self, body, slot, first_possible=None, extra_info={}, should_pack_valu=True, jump_load_data={}, simulate_only=False, simulated_slot_counts=None):
         engine, slot = slot
         slot = slot + (extra_info,)
         first_possible = len(body) if first_possible is None else first_possible
@@ -433,7 +434,9 @@ class KernelBuilder:
         if simulate_only:
             return len(body) + 1
         
-        body.append({engine: [slot]})
+        instr = defaultdict(list)
+        instr[engine].append(slot)
+        body.append(instr)
         return len(body)
     
     # returns start of jump block
@@ -723,7 +726,9 @@ class KernelBuilder:
                 elif depth < n_tree_preload_layers:
                     inp_val_instr_idxs = self.build_apply_node_val_masked(body, i, inp_val_instr_idxs, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, forest_consts_vlen, consts_vlen, round, depth, chunk_len)
                 else:
-                    jump_res_instr_idx = self.build_scratch_jump_load(body, i, inp_val_instr_idxs, jump_load_pointer, post_jump_load_offset, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, round, depth, st, n_tree_preload_layers, debug_info, simulate_only=True)
+                    jump_load_pointer_copy = copy.deepcopy(jump_load_pointer)
+                    post_jump_load_offset_copy = copy.deepcopy(post_jump_load_offset)
+                    jump_res_instr_idx = self.build_scratch_jump_load(body, i, inp_val_instr_idxs, jump_load_pointer_copy, post_jump_load_offset_copy, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, round, depth, st, n_tree_preload_layers, debug_info, simulate_only=True)
                     mem_res_instr_idx = self.build_apply_node_val_mem(body, i, inp_val_instr_idxs, inp_indices, inp_values, node_vals, round, st, debug_info, simulate_only=True)
                     # jump_res_instr_idx = 0
                     # mem_res_instr_idx = 0
