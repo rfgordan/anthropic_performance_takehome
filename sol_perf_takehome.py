@@ -345,9 +345,8 @@ class KernelBuilder:
             next_instr_idxs[i] = self.interleave_engine_fns(body, ("valu", slot), next_instr_idxs[i])
 
         for i, tree_val_vlen in enumerate(tree_vals_vlen):
-            if i == 0:
-                slot = ("^", tree_val_vlen, tree_val_vlen, last_hash_const_vlen1)
-                next_instr_idxs[i] = self.interleave_engine_fns(body, ("valu", slot), max(next_instr_idxs[i], after_hash_const_idx))
+            slot = ("^", tree_val_vlen, tree_val_vlen, last_hash_const_vlen1)
+            next_instr_idxs[i] = self.interleave_engine_fns(body, ("valu", slot), max(next_instr_idxs[i], after_hash_const_idx))
 
         return max(max(next_instr_idxs), next_instr_zero_base)
     
@@ -771,7 +770,7 @@ class KernelBuilder:
                         print("routed to mem. expected idx: ", mem_res_instr_idx, " actual: ", res_idx)
                     # print("routing vector load to jump: ", b, " jump res idx: ", jump_res_instr_idx, " mem_res_instr_idx: ", mem_res_instr_idx)
 
-                should_skip_final_xor = (round + 1) % (forest_height + 1) == 1 
+                should_skip_final_xor = (round + 1) % (forest_height + 1) < n_tree_preload_layers
                 inp_val_instr_idxs = self.build_hash_opt(body, i, inp_val_instr_idxs, inp_values, tmp1_parallel, hash_consts_vlen, round, st, end, debug_info, should_skip_final_xor)
                 for j in range(i,i+VLEN):
                     self.interleave_engine_fns(body,("debug", ("compare", inp_values + j, (round, st + j, "hashed_val"))), inp_val_instr_idxs[i // VLEN])

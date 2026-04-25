@@ -537,7 +537,7 @@ def build_mem_image(t: Tree, inp: Input) -> list[int]:
     return mem
 
 
-def myhash_traced(a: int, trace: dict[Any, int], round: int, batch_i: int) -> int:
+def myhash_traced(a: int, trace: dict[Any, int], round: int, batch_i: int, skip_last_xor: bool) -> int:
     """A simple 32-bit hash function"""
     fns = {
         "+": lambda x, y: x + y,
@@ -555,8 +555,13 @@ def myhash_traced(a: int, trace: dict[Any, int], round: int, batch_i: int) -> in
         trace[(round, batch_i, "hash_stage1", i)] = a1
         a2 = r(fns[op3](a, val3))
         # trace[(round, batch_i, "hash_stage2", i)] = a2
-        a = r(fns[op2](a1, a2))
-        trace[(round, batch_i, "hash_stage", i)] = a
+        # a3 = r(fns[op2](a1, a2))
+        if skip_last_xor and i == 5:
+            a = r(fns[op1](a, a2))
+            trace[(round, batch_i, "hash_stage", i)] = a
+        else:
+            a = r(fns[op2](a1, a2))
+            trace[(round, batch_i, "hash_stage", i)] = a
 
     return a
 
@@ -574,17 +579,27 @@ def reference_kernel2(mem: list[int], trace: dict[Any, int] = {}):
     forest_values_p = mem[4]
     inp_indices_p = mem[5]
     inp_values_p = mem[6]
+
+    def should_skip_last_xor(h):
+        next_depth = (h + 1) % (forest_height + 1)
+        return next_depth < 3 and h >= 0
+    
     yield mem
     for h in range(rounds):
-        next_depth = (h + 1) % (forest_height + 1)
+        
+        skip_last_xor = should_skip_last_xor(h)
+        did_skip_last_xor = should_skip_last_xor(h-1)
+
         for i in range(batch_size):
             idx = mem[inp_indices_p + i]
             trace[(h, i, "idx")] = idx + forest_values_p
             val = mem[inp_values_p + i]
             trace[(h, i, "val")] = val
             node_val = mem[forest_values_p + idx]
+            if did_skip_last_xor:
+                node_val ^= HASH_STAGES[-1][1]
             trace[(h, i, "node_val")] = node_val
-            val = myhash_traced(val ^ node_val, trace, h, i)
+            val = myhash_traced(val ^ node_val, trace, h, i, skip_last_xor)
             trace[(h, i, "hashed_val")] = val
             idx = 2 * idx + (1 if val % 2 == 0 else 2)
             # trace[(h, i, "next_idx")] = idx
