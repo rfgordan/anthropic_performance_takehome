@@ -107,7 +107,7 @@ class KernelBuilder:
             self.const_map[val] = addr
         return self.const_map[val]
 
-    def build_hash_opt(self, body, i, inp_val_instr_idxs, val_hash_addrs, tmp1_parallel, hash_consts_vlen, round, st, end, debug_info):
+    def build_hash_opt(self, body, i, inp_val_instr_idxs, val_hash_addrs, tmp1_parallel, hash_consts_vlen, round, st, end, debug_info, should_skip_final_xor=False):
 
         for hi, (op1, _, op2, op3, _) in enumerate(HASH_STAGES):
                 
@@ -132,6 +132,17 @@ class KernelBuilder:
             # merged multiply_add
             elif op3 == "<<" and op2 == "+" and op1 == "+":
                 slots = ("multiply_add", val_hash_addrs + i, val_hash_addrs + i, val3_const_vlen, val1_const_vlen)
+                inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN], debug_info)
+            elif hi == 5 and should_skip_final_xor:
+                
+                # op3
+                slots = (op3, tmp1_parallel + i, val_hash_addrs + i, val3_const_vlen)
+                inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN], debug_info)
+
+                # instrs.append(("debug", [("compare", tmp2_parallel + i, (round, st + i, "hash_stage2", hi)) for i in range(0, end - st)]))
+
+                # op2
+                slots = (op2, val_hash_addrs + i, tmp1_parallel + i, val_hash_addrs + i)
                 inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN], debug_info)
 
             # default path
@@ -259,18 +270,24 @@ class KernelBuilder:
             post_jump_load_offset.update_last_read(0, after_jump_back - 2)
             loads[j-i] = after_jump_back
 
-        # check node values indexed in mini (parallel) batch
-        for j in range(i,i+VLEN):
             self.interleave_engine_fns(body, ("debug", ("compare", node_vals + j, (round, st + j, "node_val"))), loads[j-i], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
 
+            slot = ("^", inp_values + j, inp_values + j, node_vals + j)
+            loads[j-i] = self.interleave_engine_fns(body, ("alu", slot), loads[j-i], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+
+
+        # check node values indexed in mini (parallel) batch
+        # for j in range(i,i+VLEN):
+        #     self.interleave_engine_fns(body, ("debug", ("compare", node_vals + j, (round, st + j, "node_val"))), loads[j-i], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+
         # perform XOR with node values in parallel
-        slots = ("^", inp_values + i, inp_values + i, node_vals + i)
-        res_instr_idx = self.interleave_engine_fns(body, ("valu", slots), max(loads), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+        # slots = ("^", inp_values + i, inp_values + i, node_vals + i)
+        # res_instr_idx = self.interleave_engine_fns(body, ("valu", slots), max(loads), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
 
         if not simulate_only:
-            inp_val_instr_idxs[i // VLEN] = res_instr_idx
+            inp_val_instr_idxs[i // VLEN] = max(loads)
 
-        return res_instr_idx
+        return max(loads)
     
     def build_apply_node_val_mem(self, body, i, inp_val_instr_idxs, inp_indices, inp_values, node_vals, round, st, debug_info, simulate_only=False, simulated_slot_counts=None):
         
@@ -307,9 +324,10 @@ class KernelBuilder:
         return res_instr_idx
     
     # after this call, should have vectors for first six indices / values
-    def build_load_tree_vals(self, body, after_init_vars_instr, tree_vals_vlen, consts_vlen):
+    def build_load_tree_vals(self, body, after_init_vars_instr, tree_vals_vlen, tree_val_zero_base_vlen, consts_vlen, last_hash_const_vlen1, after_hash_const_idx):
 
         next_instr_idxs = [len(body)] * len(tree_vals_vlen)
+        next_instr_zero_base = len(body)
         for i in range(0, len(tree_vals_vlen)):
             slot = ("+", tree_vals_vlen[i], self.scratch["forest_values_p"], consts_vlen[i])
             next_instr_idxs[i] = self.interleave_engine_fns(body, ("alu", slot), after_init_vars_instr)
@@ -319,10 +337,19 @@ class KernelBuilder:
             next_instr_idxs[i] = self.interleave_engine_fns(body, ("load", slot), next_instr_idxs[i])
 
         for i, tree_val_vlen in enumerate(tree_vals_vlen):
+            if i == 0:
+                slot = ("vbroadcast", tree_val_zero_base_vlen, tree_val_vlen)
+                next_instr_zero_base = self.interleave_engine_fns(body, ("valu", slot), next_instr_idxs[i])
+
             slot = ("vbroadcast", tree_val_vlen, tree_val_vlen)
             next_instr_idxs[i] = self.interleave_engine_fns(body, ("valu", slot), next_instr_idxs[i])
 
-        return max(next_instr_idxs)
+        for i, tree_val_vlen in enumerate(tree_vals_vlen):
+            if i == 0:
+                slot = ("^", tree_val_vlen, tree_val_vlen, last_hash_const_vlen1)
+                next_instr_idxs[i] = self.interleave_engine_fns(body, ("valu", slot), max(next_instr_idxs[i], after_hash_const_idx))
+
+        return max(max(next_instr_idxs), next_instr_zero_base)
     
     @staticmethod
     def valu_slot_to_alu_slot(slot):
@@ -507,6 +534,7 @@ class KernelBuilder:
         consts_vlen = [self.alloc_scratch(f"const_{val}_vlen", length=VLEN) for val in range(n_tree_preload_vecs)] # can go back to -1?
         forest_consts_vlen = [self.alloc_scratch(f"forest_const_{val}_vlen", length=VLEN) for val in range(n_tree_preload_vecs)]
         forest_const_m1_vlen = self.alloc_scratch(f"forest_const_m1_vlen", length=VLEN)
+        tree_val_zero_base_vlen = self.alloc_scratch("tree_val_zero_base_vlen", length=VLEN) # unmodified by xor trick
         tree_vals_vlen = [self.alloc_scratch(f"tree_val_{i}_vlen", length=VLEN) for i in range(n_tree_preload_vecs)]
         inp_val_offsets = self.alloc_scratch("inp_val_offsets", length=n_val_offsets)
         node_vals = self.alloc_scratch("node_vals", length=parallel_vals)
@@ -580,6 +608,7 @@ class KernelBuilder:
         self.interleave_engine_fns(body, slot, after_forest_vlen_instr)
 
         hash_consts_vlen = []
+        after_hash_consts_idx = []
         for hi, (_, val1, op2, op3, val3) in enumerate(HASH_STAGES):
             if op2 == "+" and op3 == "<<":
                 # if combining instructions, we need to make the constant 2 ^ val3
@@ -597,10 +626,12 @@ class KernelBuilder:
             hash_consts_vlen.append((hash_const1_vlen, hash_const3_vlen))
             val1_const = self.alloc_scratch(f"const_{hi}_{val1}")
             val3_const = self.alloc_scratch(f"const_{hi}_{val3}")
+
             after_val1_instr = self.interleave_engine_fns(body, ("load", ("const", val1_const, val1)), 0)
             after_val3_instr = self.interleave_engine_fns(body, ("load", ("const", val3_const, val3)), 0)
-            self.interleave_engine_fns(body, ("valu", ("vbroadcast", hash_const1_vlen, val1_const)), after_val1_instr)
-            self.interleave_engine_fns(body, ("valu", ("vbroadcast", hash_const3_vlen, val3_const)), after_val3_instr)
+            after_val1_instr = self.interleave_engine_fns(body, ("valu", ("vbroadcast", hash_const1_vlen, val1_const)), after_val1_instr)
+            after_val3_instr = self.interleave_engine_fns(body, ("valu", ("vbroadcast", hash_const3_vlen, val3_const)), after_val3_instr)
+            after_hash_consts_idx.append((after_val1_instr, after_val3_instr))
 
         if len(consts_vlen) > 7:
             print(f"(!!!!) not optimized path. number of const vectors: {len(consts_vlen)}")
@@ -612,6 +643,7 @@ class KernelBuilder:
                 slots = ("vbroadcast", consts_vlen[i], consts_vlen[i])
                 after_vlen_consts_init = self.interleave_engine_fns(body, ("valu", slots), after_consts_3_init)
 
+
         for i, vc in enumerate(forest_consts_vlen[1:]):
             slot = ("valu", ("+", vc, forest_consts_vlen[0], consts_vlen[i+1]))
             self.interleave_engine_fns(body, slot, max(after_vlen_consts_init,after_forest_vlen_instr))
@@ -621,7 +653,7 @@ class KernelBuilder:
         chunk_incr = self.alloc_scratch("chunk_incr")
         after_chunk_incr_idx = self.interleave_engine_fns(body, ("load", ("const", chunk_incr, parallel_vals)), 0)
 
-        after_load_tree_vals_instr = self.build_load_tree_vals(body, max(after_init_vars_instr,after_vlen_consts_init), tree_vals_vlen, consts_vlen)
+        after_load_tree_vals_instr = self.build_load_tree_vals(body, max(after_init_vars_instr,after_vlen_consts_init), tree_vals_vlen, tree_val_zero_base_vlen, consts_vlen, hash_consts_vlen[-1][0], after_hash_consts_idx[-1][0])
 
         # can potentially optimize this using alus
         # initialize the offsets with the beginning of the input values
@@ -716,7 +748,8 @@ class KernelBuilder:
                     self.interleave_engine_fns(body, ("debug", ("compare", inp_values + j, (round, st + j, "val"))), inp_val_instr_idxs[i // VLEN])
 
                 if depth == 0:
-                    inp_val_instr_idxs = self.build_apply_node_val_root(body, i, inp_val_instr_idxs, inp_values, tree_vals_vlen[0])
+                    tree_val_zero_vlen = tree_val_zero_base_vlen if round == 0 else tree_vals_vlen[0]
+                    inp_val_instr_idxs = self.build_apply_node_val_root(body, i, inp_val_instr_idxs, inp_values, tree_val_zero_vlen)
                 elif depth < n_tree_preload_layers:
                     inp_val_instr_idxs = self.build_apply_node_val_masked(body, i, inp_val_instr_idxs, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, forest_consts_vlen, consts_vlen, round, depth, chunk_len)
                 else:
@@ -738,7 +771,8 @@ class KernelBuilder:
                         print("routed to mem. expected idx: ", mem_res_instr_idx, " actual: ", res_idx)
                     # print("routing vector load to jump: ", b, " jump res idx: ", jump_res_instr_idx, " mem_res_instr_idx: ", mem_res_instr_idx)
 
-                inp_val_instr_idxs = self.build_hash_opt(body, i, inp_val_instr_idxs, inp_values, tmp1_parallel, hash_consts_vlen, round, st, end, debug_info)
+                should_skip_final_xor = (round + 1) % (forest_height + 1) == 1 
+                inp_val_instr_idxs = self.build_hash_opt(body, i, inp_val_instr_idxs, inp_values, tmp1_parallel, hash_consts_vlen, round, st, end, debug_info, should_skip_final_xor)
                 for j in range(i,i+VLEN):
                     self.interleave_engine_fns(body,("debug", ("compare", inp_values + j, (round, st + j, "hashed_val"))), inp_val_instr_idxs[i // VLEN])
 

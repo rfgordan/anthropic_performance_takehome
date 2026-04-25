@@ -576,6 +576,7 @@ def reference_kernel2(mem: list[int], trace: dict[Any, int] = {}):
     inp_values_p = mem[6]
     yield mem
     for h in range(rounds):
+        next_depth = (h + 1) % (forest_height + 1)
         for i in range(batch_size):
             idx = mem[inp_indices_p + i]
             trace[(h, i, "idx")] = idx + forest_values_p
