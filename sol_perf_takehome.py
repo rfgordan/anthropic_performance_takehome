@@ -313,8 +313,11 @@ class KernelBuilder:
             self.interleave_engine_fns(body, ("debug", ("compare", node_vals + j, (round, st + j, "node_val"))), loads[j-i], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
 
         # perform XOR with node values in parallel
-        slots = ("^", inp_values + i, inp_values + i, node_vals + i)
-        res_instr_idx = self.interleave_engine_fns(body, ("valu", slots), max(loads), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+        # slots = ("^", inp_values + i, inp_values + i, node_vals + i)
+        # res_instr_idx = self.interleave_engine_fns(body, ("valu", slots), max(loads), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+        for j in range(i,i+VLEN):
+            slots = ("^", inp_values + j, inp_values + j, node_vals + j)
+            res_instr_idx = self.interleave_engine_fns(body, ("alu", slots), loads[j-i], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
         
         if not simulate_only:
             inp_val_instr_idxs[i // VLEN] = res_instr_idx
