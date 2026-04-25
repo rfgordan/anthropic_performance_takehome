@@ -237,10 +237,11 @@ class KernelBuilder:
             slots = ("multiply_add", node_vals + i, tmp1_parallel + i, tree_vals_vlen[j], base_load_vlen)
 
             # we want to depend on the final m_add
-            post_mask_instr_idx = self.interleave_engine_fns(body, ("valu", slots), post_mask_instr_idx, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+            post_mult_instr_idx = self.interleave_engine_fns(body, ("valu", slots), post_mask_instr_idx, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+            post_mask_instr_idx = post_mult_instr_idx - 1
 
         slots = ("^", inp_values + i, node_vals + i, inp_values + i)
-        res_instr_idx = self.interleave_engine_fns(body, ("valu", slots), post_mask_instr_idx, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+        res_instr_idx = self.interleave_engine_fns(body, ("valu", slots), post_mult_instr_idx, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
 
         if not simulate_only:
             inp_val_instr_idxs[i // VLEN] = res_instr_idx
