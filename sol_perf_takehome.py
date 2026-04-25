@@ -374,7 +374,7 @@ class KernelBuilder:
                 instr[engine] = [slot]
                 return i + 1
             
-            if engine in instr and len(instr[engine]) < SLOT_LIMITS[engine]:
+            if len(instr[engine]) < SLOT_LIMITS[engine]:
                 if simulate_only:
                     return i+1
                 
