@@ -315,28 +315,10 @@ class KernelBuilder:
         # perform XOR with node values in parallel
         # slots = ("^", inp_values + i, inp_values + i, node_vals + i)
         # res_instr_idx = self.interleave_engine_fns(body, ("valu", slots), max(loads), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
-        
-        # can simulate batching vs per-load
-
-        # simulate per-load:
-        per_load_sim_slot_counts = defaultdict(lambda: defaultdict(int)) if simulated_slot_counts is None else copy.deepcopy(simulated_slot_counts)
-        vec_sim_slot_counts = defaultdict(lambda: defaultdict(int)) if simulated_slot_counts is None else copy.deepcopy(simulated_slot_counts)
-        per_load_idx = 0
-        vec_load_idx = 0
         for j in range(i,i+VLEN):
             slots = ("^", inp_values + j, inp_values + j, node_vals + j)
-            per_load_idx = self.interleave_engine_fns(body, ("alu", slots), loads[j-i], simulate_only=True, simulated_slot_counts=per_load_sim_slot_counts)
+            res_instr_idx = self.interleave_engine_fns(body, ("alu", slots), loads[j-i], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
         
-        slots = ("^", inp_values + i, inp_values + i, node_vals + i)
-        vec_load_idx = self.interleave_engine_fns(body, ("valu", slots), max(loads), simulate_only=True, simulated_slot_counts=vec_sim_slot_counts)
-        if per_load_idx <= vec_load_idx:
-            for j in range(i,i+VLEN):
-                slots = ("^", inp_values + j, inp_values + j, node_vals + j)
-                res_instr_idx = self.interleave_engine_fns(body, ("alu", slots), loads[j-i], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
-        else:
-            slots = ("^", inp_values + i, inp_values + i, node_vals + i)
-            res_instr_idx = self.interleave_engine_fns(body, ("valu", slots), max(loads), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
-
         if not simulate_only:
             inp_val_instr_idxs[i // VLEN] = res_instr_idx
         # # broadcast forest location in mem
