@@ -212,22 +212,24 @@ class KernelBuilder:
 
     def build_apply_node_val_masked(self, body, i, inp_val_instr_idxs, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, tree_idxs_vlen, consts_vlen, round, depth, chunk_len):
 
-        # set node_vals to 0
-        if round > 0:
-            slots = ("vbroadcast", node_vals + i, consts_vlen[0])
-            post_reset_node_vals = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
+        # # set node_vals to 0
+        # if round > 0:
+        #     slots = ("vbroadcast", node_vals + i, consts_vlen[0])
+        #     post_reset_node_vals = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
 
         # iterate over all possible tree nodes
         for j in range(2**depth - 1, 2**(depth + 1) - 1):
+
+            base_load_vlen = consts_vlen[0] if j == 2**depth - 1 else node_vals + i
 
             # mask input indices vs constants
             slots = ("==", tmp1_parallel + i, inp_indices + i, tree_idxs_vlen[j])
             post_mask_instr_idx = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
             # add node value if mask is true
-            slots = ("multiply_add", node_vals + i, tmp1_parallel + i, tree_vals_vlen[j], node_vals + i)
+            slots = ("multiply_add", node_vals + i, tmp1_parallel + i, tree_vals_vlen[j], base_load_vlen)
 
             # we want to depend on the final m_add
-            inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), max(post_mask_instr_idx,post_reset_node_vals))
+            inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), post_mask_instr_idx)
 
         slots = ("^", inp_values + i, node_vals + i, inp_values + i)
         inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
