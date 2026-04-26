@@ -898,9 +898,9 @@ class KernelBuilder:
                 elif depth < n_tree_preload_layers:
                     self.build_apply_node_val_masked(body, i, inp_val_instr_idxs, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, forest_consts_vlen, consts_vlen, depth)
                 # elif depth < n_jump_layers_enabled + n_tree_preload_layers and st == 0 and i == 0:
-                #     self.build_double_scratch_jump_load(body, i, inp_val_instr_idxs, tmp_jump1, tmp_jump2, jump_load_pointer, post_jump_load_offset, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, jump_layer_lens, jump_layer_lens_sq, consts[0], round, depth, st, n_tree_preload_layers, debug_info)
-                # else:
-                    # self.build_apply_node_val_mem(body, i, inp_val_instr_idxs, inp_indices, inp_values, node_vals, round, st, debug_info, simulate_only=False)
+                #     self.build_double_scratch_jump_load(body, i, inp_val_instr_idxs, tmp_jump1, tmp_jump2, jump_load_pointer, jump_load_pointer_alt, post_jump_load_offset, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, jump_layer_lens, jump_layer_lens_sq, consts[0], round, depth, st, n_tree_preload_layers, debug_info)
+                # elif True:
+                #     self.build_apply_node_val_mem(body, i, inp_val_instr_idxs, inp_indices, inp_values, node_vals, round, st, debug_info, simulate_only=False)
                 else:
                     can_apply_node_val_masked = depth < n_tree_preload_layers
 
@@ -913,21 +913,22 @@ class KernelBuilder:
                     first_idx = mem_res_instr_idx
                     routing_decision = LoadRouting.FROM_MEM_LOAD
 
-                    tmp_jump1_copy = copy.deepcopy(tmp_jump1)
-                    tmp_jump2_copy = copy.deepcopy(tmp_jump2)
-                    jump_load_pointer_copy = copy.deepcopy(jump_load_pointer)
-                    jump_load_pointer_alt_copy = copy.deepcopy(jump_load_pointer_alt)
-                    post_jump_load_offset_copy = copy.deepcopy(post_jump_load_offset)
-                    simulated_counts_jump = defaultdict(lambda: defaultdict(int))
-                    jump_res_instr_idx = self.build_double_scratch_jump_load(body, i, inp_val_instr_idxs, tmp_jump1_copy, tmp_jump2_copy, jump_load_pointer_copy, jump_load_pointer_alt_copy, post_jump_load_offset_copy, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, jump_layer_lens, jump_layer_lens_sq, consts[0], round, depth, st, n_tree_preload_layers, debug_info, simulate_only=True, simulated_slot_counts=simulated_counts_jump)
-                    
-                    if can_apply_node_val_masked:
-                        slot = ("^", inp_values + i, inp_values + i, hash_consts_vlen[-1][0])
-                        jump_res_instr_idx = self.interleave_engine_fns(body, ("valu", slot), max(jump_res_instr_idx, after_hash_consts_idx[-1][0]), simulate_only=True, simulated_slot_counts=simulated_counts_jump)
-                    
-                    if jump_res_instr_idx < first_idx:
-                        first_idx = jump_res_instr_idx
-                        routing_decision = LoadRouting.JUMP_LOAD_2X
+                    if depth < n_tree_preload_layers + n_jump_layers_enabled:
+                        tmp_jump1_copy = copy.deepcopy(tmp_jump1)
+                        tmp_jump2_copy = copy.deepcopy(tmp_jump2)
+                        jump_load_pointer_copy = copy.deepcopy(jump_load_pointer)
+                        jump_load_pointer_alt_copy = copy.deepcopy(jump_load_pointer_alt)
+                        post_jump_load_offset_copy = copy.deepcopy(post_jump_load_offset)
+                        simulated_counts_jump = defaultdict(lambda: defaultdict(int))
+                        jump_res_instr_idx = self.build_double_scratch_jump_load(body, i, inp_val_instr_idxs, tmp_jump1_copy, tmp_jump2_copy, jump_load_pointer_copy, jump_load_pointer_alt_copy, post_jump_load_offset_copy, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, jump_layer_lens, jump_layer_lens_sq, consts[0], round, depth, st, n_tree_preload_layers, debug_info, simulate_only=True, simulated_slot_counts=simulated_counts_jump)
+                        
+                        if can_apply_node_val_masked:
+                            slot = ("^", inp_values + i, inp_values + i, hash_consts_vlen[-1][0])
+                            jump_res_instr_idx = self.interleave_engine_fns(body, ("valu", slot), max(jump_res_instr_idx, after_hash_consts_idx[-1][0]), simulate_only=True, simulated_slot_counts=simulated_counts_jump)
+                        
+                        if jump_res_instr_idx < first_idx:
+                            first_idx = jump_res_instr_idx
+                            routing_decision = LoadRouting.JUMP_LOAD_2X
 
                     # routing for the masked stuff has some non-deterministic bug and doesnt increase speed
 
