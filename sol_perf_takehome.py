@@ -47,31 +47,49 @@ class LoadRouting(Enum):
 
 @dataclass
 class ScratchObjectWrapper:
-    addr: int
-    l: int
+    # l: int
     last_reads: list[int]
     last_writes: list[int]
-    is_tracked_by_vlen: bool
+    _addr: int
+    # is_tracked_by_vlen: bool
 
-    def get_next_read(self, i=0):
+    def addr(self):
+        return self._addr
+
+    def dcopy(self):
+        return copy.deepcopy(self)
+
+    def get_next_read(self, i=0, by_vlen=False):
+        if by_vlen:
+            return max([self.get_next_read(j) for j in range(i,i+VLEN)])
         return self.last_writes[i] + 1
     
     # writes can be simultaneous with reads
-    def get_next_write(self, i=0):
+    def get_next_write(self, i=0, by_vlen=False):
+        if by_vlen:
+            return max([self.get_next_read_write(j) for j in range(i,i+VLEN)])
         return self.last_reads[i]
     
-    def get_next_read_write(self, i=0):
-        return max(self.last_writes[i] + 1, self.last_reads[i])
+    def get_next_read_write(self, i=0, by_vlen=False):
+        return max(self.get_next_read(i, by_vlen=by_vlen), self.get_next_write(i, by_vlen=by_vlen))
     
-    def update_last_read(self, val, i=0):
-        self.last_reads[i] = val
+    def update_last_read(self, val, i=0, by_vlen=False):
+        if by_vlen:
+            for j in range(i,i+VLEN):
+                self.last_reads[j] = val
+        else:
+            self.last_reads[i] = val
     
-    def update_last_write(self, val, i=0):
-        self.last_writes[i] = val
+    def update_last_write(self, val, i=0, by_vlen=False):
+        if by_vlen:
+            for j in range(i,i+VLEN):
+                self.last_writes[j] = val
+        else:
+            self.last_writes[i] = val
 
-    def update_last_read_write(self, val, i=0):
-        self.last_writes[i] = val
-        self.last_reads[i] = val
+    def update_last_read_write(self, val, i=0, by_vlen=False):
+        self.update_last_read(val, i, by_vlen=by_vlen)
+        self.update_last_write(val, i, by_vlen=by_vlen)
 
 class KernelBuilder:
     def __init__(self):
@@ -108,11 +126,11 @@ class KernelBuilder:
         assert self.scratch_ptr <= SCRATCH_SIZE, "Out of scratch space"
         return addr
     
-    def create_wrapped_scratch_data(self, name=None, length=1, is_tracked_by_vlen=False):
+    def create_wrapped_scratch_data(self, name=None, length=1):
         addr = self.alloc_scratch(name, length)
-        last_reads = [0] * (length // (VLEN if is_tracked_by_vlen else 1))
-        last_writes = [0] * (length // (VLEN if is_tracked_by_vlen else 1))
-        return ScratchObjectWrapper(addr, length, last_reads, last_writes, is_tracked_by_vlen)
+        last_reads = [0] * length
+        last_writes = [0] * length
+        return ScratchObjectWrapper(last_reads, last_writes, addr)
 
     def scratch_const(self, val, name=None):
         if val not in self.const_map:
@@ -121,67 +139,82 @@ class KernelBuilder:
             self.const_map[val] = addr
         return self.const_map[val]
 
-    def build_hash_opt(self, body, i, inp_val_instr_idxs, val_hash_addrs, tmp1_parallel, hash_consts_vlen, round, st, end, debug_info, should_skip_final_xor=False):
+    def build_hash_opt(self, body, i, val_hash_addrs : ScratchObjectWrapper, tmp1_parallel : ScratchObjectWrapper, hash_consts_vlen, round, st, end, debug_info, should_skip_final_xor=False):
 
         for hi, (op1, _, op2, op3, _) in enumerate(HASH_STAGES):
                 
             if hi != 3:
                 for j in range(i,i+VLEN):
-                    self.interleave_engine_fns(body, ("debug", ("compare", val_hash_addrs + j, (round, st + j, "pre_hash_stage", hi))), inp_val_instr_idxs[i // VLEN])
+                    self.interleave_engine_fns(body, ("debug", ("compare", val_hash_addrs.addr() + j, (round, st + j, "pre_hash_stage", hi))), val_hash_addrs.get_next_read(j))
 
             val1_const_vlen, val3_const_vlen = hash_consts_vlen[hi]
 
             # for stage 2, we do two multiply_adds, then xor in stage 3
             if hi == 2:
                 next_val1_const_vlen, next_val3_const_vlen = hash_consts_vlen[hi+1]
-                slots = ("multiply_add", tmp1_parallel + i, val_hash_addrs + i, val3_const_vlen, val1_const_vlen)
-                self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN], debug_info)
+                slots = ("multiply_add", tmp1_parallel.addr() + i, val_hash_addrs.addr() + i, val3_const_vlen, val1_const_vlen)
+                res = self.interleave_engine_fns(body, ("valu", slots), max(tmp1_parallel.get_next_write(i, by_vlen=True), val_hash_addrs.get_next_read(i, by_vlen=True)), debug_info)
+                tmp1_parallel.update_last_write(res - 1, i, by_vlen=True)
+                val_hash_addrs.update_last_read(res - 1, i, by_vlen=True)
 
-                slots = ("multiply_add", val_hash_addrs + i, val_hash_addrs + i, next_val3_const_vlen, next_val1_const_vlen)
-                inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN], debug_info)
+                slots = ("multiply_add", val_hash_addrs.addr() + i, val_hash_addrs.addr() + i, next_val3_const_vlen, next_val1_const_vlen)
+                res = self.interleave_engine_fns(body, ("valu", slots), val_hash_addrs.get_next_read_write(i, by_vlen=True), debug_info)
+                val_hash_addrs.update_last_read_write(res - 1, i, by_vlen=True)
+
             elif hi == 3:
-                slots = ("^", val_hash_addrs + i, tmp1_parallel + i, val_hash_addrs + i)
-                inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN], debug_info)
+                slots = ("^", val_hash_addrs.addr() + i, tmp1_parallel.addr() + i, val_hash_addrs.addr() + i)
+                res = self.interleave_engine_fns(body, ("valu", slots), max(val_hash_addrs.get_next_read_write(i, by_vlen=True), tmp1_parallel.get_next_read(i, by_vlen=True)), debug_info)
+                val_hash_addrs.update_last_read_write(res - 1, i, by_vlen=True)
 
             # merged multiply_add
             elif op3 == "<<" and op2 == "+" and op1 == "+":
-                slots = ("multiply_add", val_hash_addrs + i, val_hash_addrs + i, val3_const_vlen, val1_const_vlen)
-                inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN], debug_info)
+                slots = ("multiply_add", val_hash_addrs.addr() + i, val_hash_addrs.addr() + i, val3_const_vlen, val1_const_vlen)
+                res = self.interleave_engine_fns(body, ("valu", slots), val_hash_addrs.get_next_read_write(i, by_vlen=True), debug_info)
+                val_hash_addrs.update_last_read_write(res - 1, i, by_vlen=True)
+
             elif hi == 5 and should_skip_final_xor:
                 
                 # op3
-                slots = (op3, tmp1_parallel + i, val_hash_addrs + i, val3_const_vlen)
-                inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN], debug_info)
+                slots = (op3, tmp1_parallel.addr() + i, val_hash_addrs.addr() + i, val3_const_vlen)
+                res = self.interleave_engine_fns(body, ("valu", slots), max(tmp1_parallel.get_next_write(i, by_vlen=True), val_hash_addrs.get_next_read(i, by_vlen=True)), debug_info)
+                tmp1_parallel.update_last_write(res - 1, i, by_vlen=True)
+                val_hash_addrs.update_last_read(res - 1, i, by_vlen=True)
 
                 # instrs.append(("debug", [("compare", tmp2_parallel + i, (round, st + i, "hash_stage2", hi)) for i in range(0, end - st)]))
 
                 # op2
-                slots = (op2, val_hash_addrs + i, tmp1_parallel + i, val_hash_addrs + i)
-                inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN], debug_info)
+                slots = (op2, val_hash_addrs.addr() + i, tmp1_parallel.addr() + i, val_hash_addrs.addr() + i)
+                res = self.interleave_engine_fns(body, ("valu", slots), max(val_hash_addrs.get_next_read_write(i, by_vlen=True), tmp1_parallel.get_next_read(i, by_vlen=True)), debug_info)
+                val_hash_addrs.update_last_read_write(res - 1, i, by_vlen=True)
+                tmp1_parallel.update_last_read(res - 1, i, by_vlen=True)
 
             # default path
             else:
                 # op1
-                slots = (op1, tmp1_parallel + i, val_hash_addrs + i, val1_const_vlen)
-                self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN], debug_info)
+                slots = (op1, tmp1_parallel.addr() + i, val_hash_addrs.addr() + i, val1_const_vlen)
+                res = self.interleave_engine_fns(body, ("valu", slots), max(tmp1_parallel.get_next_write(i, by_vlen=True), val_hash_addrs.get_next_read(i, by_vlen=True)), debug_info)
+                tmp1_parallel.update_last_write(res - 1, i, by_vlen=True)
+                val_hash_addrs.update_last_read(res - 1, i, by_vlen=True)
 
                 # instrs.append(("debug", [("compare", tmp1_parallel + i, (round, st + i, "hash_stage1", hi)) for i in range(0, end - st)]))
 
                 # op3
-                slots = (op3, val_hash_addrs + i, val_hash_addrs + i, val3_const_vlen)
-                inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN], debug_info)
+                slots = (op3, val_hash_addrs.addr() + i, val_hash_addrs.addr() + i, val3_const_vlen)
+                res = self.interleave_engine_fns(body, ("valu", slots), val_hash_addrs.get_next_read_write(i, by_vlen=True), debug_info)
+                val_hash_addrs.update_last_read_write(res - 1, i, by_vlen=True)
 
                 # instrs.append(("debug", [("compare", tmp2_parallel + i, (round, st + i, "hash_stage2", hi)) for i in range(0, end - st)]))
 
                 # op2
-                slots = (op2, val_hash_addrs + i, tmp1_parallel + i, val_hash_addrs + i)
-                inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN], debug_info)
+                slots = (op2, val_hash_addrs.addr() + i, tmp1_parallel.addr() + i, val_hash_addrs.addr() + i)
+                res = self.interleave_engine_fns(body, ("valu", slots), max(val_hash_addrs.get_next_read_write(i, by_vlen=True), tmp1_parallel.get_next_read(i, by_vlen=True)), debug_info)
+                val_hash_addrs.update_last_read_write(res - 1, i, by_vlen=True)
 
             if hi != 2:
                 for j in range(i,i+VLEN):
-                    self.interleave_engine_fns(body, ("debug", ("compare", val_hash_addrs + j, (round, st + j, "hash_stage", hi))), inp_val_instr_idxs[i // VLEN])
+                    self.interleave_engine_fns(body, ("debug", ("compare", val_hash_addrs.addr() + j, (round, st + j, "hash_stage", hi))), val_hash_addrs.get_next_read(j))
 
-        return inp_val_instr_idxs
+        return res
     
     def build_hash(self, val_hash_addr, tmp1, tmp2, round, i):
         slots = []
@@ -195,90 +228,102 @@ class KernelBuilder:
 
         return slots
     
-    def build_idx_wrap(self, body, i, inp_idx_instr_idxs, scratch_inp_idx, chunk_len, zero_const_vlen):
+    def build_idx_wrap(self, body, i, scratch_inp_idx : ScratchObjectWrapper, chunk_len, zero_const_vlen):
 
-        slots = ("vbroadcast", scratch_inp_idx + i, zero_const_vlen)
-        inp_idx_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_idx_instr_idxs[i // VLEN])
+        slots = ("vbroadcast", scratch_inp_idx.addr() + i, zero_const_vlen)
+        res = self.interleave_engine_fns(body, ("valu", slots), scratch_inp_idx.get_next_write(i, by_vlen=True))
+        scratch_inp_idx.update_last_write(res - 1, i, by_vlen=True)
 
-        return inp_idx_instr_idxs
+        return res
     
-    def build_idx_next(self, body, i, inp_val_instr_idxs, scratch_inp_idx, scratch_inp_val, tmp1_parallel, chunk_len, forest_const_m1_vlen, one_const_vlen, two_const_vlen):
+    def build_idx_next(self, body, i, scratch_inp_idx : ScratchObjectWrapper, scratch_inp_val : ScratchObjectWrapper, tmp1_parallel : ScratchObjectWrapper, chunk_len, forest_const_m1_vlen, one_const_vlen, two_const_vlen):
 
         # tmp1 = val % 2
-        slots = ("%", tmp1_parallel + i, scratch_inp_val + i, two_const_vlen)
-        inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
+        slots = ("%", tmp1_parallel.addr() + i, scratch_inp_val.addr() + i, two_const_vlen)
+        res = self.interleave_engine_fns(body, ("valu", slots), max(tmp1_parallel.get_next_write(i, by_vlen=True), scratch_inp_val.get_next_read(i, by_vlen=True)))
+        tmp1_parallel.update_last_write(res - 1, i, by_vlen=True)
+        scratch_inp_val.update_last_read(res - 1, i, by_vlen=True)
 
         # idx = (idx * 2) + tmp1
-        slots = ("multiply_add", scratch_inp_idx + i, scratch_inp_idx + i, two_const_vlen, tmp1_parallel + i)
-        inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
+        slots = ("multiply_add", scratch_inp_idx.addr() + i, scratch_inp_idx.addr() + i, two_const_vlen, tmp1_parallel.addr() + i)
+        res = self.interleave_engine_fns(body, ("valu", slots), max(scratch_inp_idx.get_next_read_write(i, by_vlen=True), tmp1_parallel.get_next_read(i, by_vlen=True)))
+        scratch_inp_val.update_last_read_write(res - 1, i, by_vlen=True)
+        tmp1_parallel.update_last_write(res - 1, i, by_vlen=True)
 
         # idx = idx - (forest_values_p - 1)
-        slots = ("-", scratch_inp_idx + i, scratch_inp_idx + i, forest_const_m1_vlen)
-        inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
+        slots = ("-", scratch_inp_idx.addr() + i, scratch_inp_idx.addr() + i, forest_const_m1_vlen)
+        res = self.interleave_engine_fns(body, ("valu", slots), scratch_inp_idx.get_next_read_write(i, by_vlen=True))
+        scratch_inp_idx.update_last_read_write(res - 1, i, by_vlen=True)
 
-        return inp_val_instr_idxs
+        return res
     
-    def build_apply_node_val_root(self, body, i, inp_val_instr_idxs, inp_values, root_node_val_vlen):
-        slots = ("^", inp_values + i, inp_values + i, root_node_val_vlen)
-        inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
-        return inp_val_instr_idxs
+    def build_apply_node_val_root(self, body, i, inp_values : ScratchObjectWrapper, root_node_val_vlen):
+        slots = ("^", inp_values.addr() + i, inp_values.addr() + i, root_node_val_vlen)
+        res = self.interleave_engine_fns(body, ("valu", slots), inp_values.get_next_read_write(i, by_vlen=True))
+        inp_values.update_last_read_write(res - 1, i, by_vlen=True)
+        return res
 
 
-    def build_apply_node_val_masked(self, body, i, inp_val_instr_idxs, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, tree_idxs_vlen, consts_vlen, depth, simulate_only=False, simulated_slot_counts=None):
+    def build_apply_node_val_masked(self, body, i, inp_values : ScratchObjectWrapper, inp_indices : ScratchObjectWrapper, node_vals : ScratchObjectWrapper, tmp1_parallel : ScratchObjectWrapper, tree_vals_vlen, tree_idxs_vlen, consts_vlen, depth, simulate_only=False, simulated_slot_counts=None):
 
         # # set node_vals to 0
         # if round > 0:
         #     slots = ("vbroadcast", node_vals + i, consts_vlen[0])
         #     post_reset_node_vals = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
 
-        post_mask_instr_idx = inp_val_instr_idxs[i // VLEN]
+        res = len(body)
 
         # iterate over all possible tree nodes
         for j in range(2**depth - 1, 2**(depth + 1) - 1):
 
-            base_load_vlen = consts_vlen[0] if j == 2**depth - 1 else node_vals + i
+            base_load_vlen = consts_vlen[0] if j == 2**depth - 1 else node_vals.addr() + i
 
             # mask input indices vs constants
-            slots = ("==", tmp1_parallel + i, inp_indices + i, tree_idxs_vlen[j])
-            post_mask_instr_idx = self.interleave_engine_fns(body, ("valu", slots), post_mask_instr_idx, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+            slots = ("==", tmp1_parallel.addr() + i, inp_indices.addr() + i, tree_idxs_vlen[j])
+            res = self.interleave_engine_fns(body, ("valu", slots), max(tmp1_parallel.get_next_write(i, by_vlen=True), inp_indices.get_next_write(i, by_vlen=True)), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+            tmp1_parallel.update_last_write(res - 1, i, by_vlen=True)
+            inp_indices.update_last_write(res - 1, i, by_vlen=True)
+
             # add node value if mask is true
-            slots = ("multiply_add", node_vals + i, tmp1_parallel + i, tree_vals_vlen[j], base_load_vlen)
+            slots = ("multiply_add", node_vals.addr() + i, tmp1_parallel.addr() + i, tree_vals_vlen[j], base_load_vlen)
 
             # we want to depend on the final m_add
-            post_mult_instr_idx = self.interleave_engine_fns(body, ("valu", slots), post_mask_instr_idx, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
-            post_mask_instr_idx = post_mult_instr_idx - 1
+            res = self.interleave_engine_fns(body, ("valu", slots), max(node_vals.get_next_write(i, by_vlen=True), tmp1_parallel.get_next_read(i, by_vlen=True)), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+            node_vals.update_last_write(res - 1, i, by_vlen=True)
+            tmp1_parallel.update_last_read(res - 1, i, by_vlen=True)
 
-        slots = ("^", inp_values + i, node_vals + i, inp_values + i)
-        res_instr_idx = self.interleave_engine_fns(body, ("valu", slots), post_mult_instr_idx, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+        slots = ("^", inp_values.addr() + i, node_vals.addr() + i, inp_values.addr() + i)
+        res = self.interleave_engine_fns(body, ("valu", slots), max(inp_values.get_next_read_write(i, by_vlen=True), node_vals.get_next_read(i, by_vlen=True)), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+        inp_values.update_last_read_write(res - 1, i, by_vlen=True)
+        node_vals.update_last_read(res - 1, i, by_vlen=True)
 
-        if not simulate_only:
-            inp_val_instr_idxs[i // VLEN] = res_instr_idx
+        return res
 
-        return res_instr_idx
-
-    def build_double_scratch_jump_load(self, body, i, inp_val_instr_idxs, tmp_jump1 : ScratchObjectWrapper, tmp_jump2 : ScratchObjectWrapper, jump_load_pointer : ScratchObjectWrapper, jump_load_pointer_alt : ScratchObjectWrapper, post_jump_load_offset : ScratchObjectWrapper, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, jump_layer_lens, jump_layer_lens_sq, zero_const, round, depth, st, n_tree_preload_layers, debug_info, simulate_only=False, simulated_slot_counts=None):
+    def build_double_scratch_jump_load(self, body, i, tmp_jump1 : ScratchObjectWrapper, tmp_jump2 : ScratchObjectWrapper, jump_load_pointer : ScratchObjectWrapper, jump_load_pointer_alt : ScratchObjectWrapper, post_jump_load_offset : ScratchObjectWrapper, inp_indices : ScratchObjectWrapper, inp_values : ScratchObjectWrapper, node_vals : ScratchObjectWrapper, in_mem_node_vals, jump_layer_offsets, jump_layer_lens, jump_layer_lens_sq, zero_const, round, depth, st, n_tree_preload_layers, debug_info, simulate_only=False, simulated_slot_counts=None):
         
-        loads = [len(body)] * VLEN
+        res = len(body)
         for j1 in range(i, i+VLEN, 2):
             j2 = j1+1
             
             # ind1 -= offset
-            slot = ("-", tmp_jump1.addr, inp_indices + j1, jump_layer_offsets + depth - n_tree_preload_layers)
-            res = self.interleave_engine_fns(body, ("alu", slot), max(inp_val_instr_idxs[i // VLEN], tmp_jump1.get_next_write()), debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+            slot = ("-", tmp_jump1.addr(), inp_indices.addr() + j1, jump_layer_offsets + depth - n_tree_preload_layers)
+            res = self.interleave_engine_fns(body, ("alu", slot), max(inp_indices.get_next_read(j1), tmp_jump1.get_next_write()), debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
             tmp_jump1.update_last_write(res - 1)
+            inp_indices.update_last_read(res - 1)
 
             # ind2 -= offset
-            slot = ("-", tmp_jump2.addr, inp_indices + j2, jump_layer_offsets + depth - n_tree_preload_layers)
-            res = self.interleave_engine_fns(body, ("alu", slot), max(inp_val_instr_idxs[i // VLEN], tmp_jump2.get_next_write()), debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+            slot = ("-", tmp_jump2.addr(), inp_indices.addr() + j2, jump_layer_offsets + depth - n_tree_preload_layers)
+            res = self.interleave_engine_fns(body, ("alu", slot), max(inp_indices.get_next_read(j2), tmp_jump2.get_next_write()), debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
             tmp_jump2.update_last_write(res - 1)
+            inp_indices.update_last_read(res - 1)
 
             # ind1 = ind1 * layer_len
-            slot = ("*", tmp_jump1.addr, tmp_jump1.addr, jump_layer_lens + depth - n_tree_preload_layers)
+            slot = ("*", tmp_jump1.addr(), tmp_jump1.addr(), jump_layer_lens + depth - n_tree_preload_layers)
             res = self.interleave_engine_fns(body, ("alu", slot), tmp_jump1.get_next_read_write(), debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
             tmp_jump1.update_last_read_write(res - 1)
 
             # ind2 += ind1
-            slot = ("+", tmp_jump2.addr, tmp_jump1.addr, tmp_jump2.addr)
+            slot = ("+", tmp_jump2.addr(), tmp_jump1.addr(), tmp_jump2.addr())
             res = self.interleave_engine_fns(body, ("alu", slot), max(tmp_jump2.get_next_read_write(), tmp_jump1.get_next_read()), debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
             tmp_jump2.update_last_read_write(res - 1)
             tmp_jump1.update_last_read(res - 1)
@@ -292,103 +337,51 @@ class KernelBuilder:
                 next_jump_load_pointer = jump_load_pointer_alt
 
             # jump_pointer += ind1
-            slot = ("+", first_jump_load_pointer.addr, first_jump_load_pointer.addr, tmp_jump2.addr)
+            slot = ("+", first_jump_load_pointer.addr(), first_jump_load_pointer.addr(), tmp_jump2.addr())
             res = self.interleave_engine_fns(body, ("alu", slot), max(first_jump_load_pointer.get_next_read_write(), tmp_jump2.get_next_read()), debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
             first_jump_load_pointer.update_last_read_write(res - 1)
             tmp_jump2.update_last_read(res - 1)
 
             # set post jump pointer to layer_len ** 2
-            slot = ("+", post_jump_load_offset.addr, post_jump_load_offset.addr, jump_layer_lens_sq + depth - n_tree_preload_layers)
+            slot = ("+", post_jump_load_offset.addr(), post_jump_load_offset.addr(), jump_layer_lens_sq + depth - n_tree_preload_layers)
             res = self.interleave_engine_fns(body, ("alu", slot), post_jump_load_offset.get_next_read_write(), debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
             post_jump_load_offset.update_last_read_write(res - 1)
 
             # update alternative jump load pointer directly
-            slot = ("+", next_jump_load_pointer.addr, next_jump_load_pointer.addr, jump_layer_lens_sq + depth - n_tree_preload_layers)
+            slot = ("+", next_jump_load_pointer.addr(), next_jump_load_pointer.addr(), jump_layer_lens_sq + depth - n_tree_preload_layers)
             res = self.interleave_engine_fns(body, ("alu", slot), next_jump_load_pointer.get_next_read_write(), debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
             next_jump_load_pointer.update_last_read_write(res - 1)
 
             jump_load_data={
-                "dest1" : node_vals + j1,
-                "dest2" : node_vals + j2,
+                "dest1" : node_vals.addr() + j1,
+                "dest2" : node_vals.addr() + j2,
                 "st" : in_mem_node_vals + 2**depth - 2**n_tree_preload_layers,
                 "end" : in_mem_node_vals + 2**(depth + 1) - 2**n_tree_preload_layers,
-                "post_jump_load_offset" : post_jump_load_offset.addr,
+                "post_jump_load_offset" : post_jump_load_offset.addr(),
                 "zero_const" : zero_const,
             }
 
             # jump indirect will trigger reserving the next slot for a flow op
             # can be synchronous with after_zero_node_val since its the jump-back instruction that loads to it
-            slot = ("jump_indirect", first_jump_load_pointer.addr)
-            after_jump_back = self.interleave_engine_fns(body, ("flow", slot), max(first_jump_load_pointer.get_next_read_write(), post_jump_load_offset.get_next_read()), debug_info, jump_load_data=jump_load_data, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
-            first_jump_load_pointer.update_last_read_write(after_jump_back - 1)
-            post_jump_load_offset.update_last_read(after_jump_back - 1)
-            loads[j1-i] = after_jump_back
-            loads[j2-i] = after_jump_back
+            slot = ("jump_indirect", first_jump_load_pointer.addr())
+            res = self.interleave_engine_fns(body, ("flow", slot), max(first_jump_load_pointer.get_next_read_write(), post_jump_load_offset.get_next_read()), debug_info, jump_load_data=jump_load_data, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+            first_jump_load_pointer.update_last_read_write(res - 1)
+            post_jump_load_offset.update_last_read(res - 1)
+            node_vals.update_last_write(res - 1, j1)
+            node_vals.update_last_write(res - 1, j2)
 
-            self.interleave_engine_fns(body, ("debug", ("compare", node_vals + j1, (round, st + j1, "node_val"))), loads[j1-i], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
-            self.interleave_engine_fns(body, ("debug", ("compare", node_vals + j2, (round, st + j2, "node_val"))), loads[j2-i], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+            self.interleave_engine_fns(body, ("debug", ("compare", node_vals.addr() + j1, (round, st + j1, "node_val"))), node_vals.get_next_read(j1), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+            self.interleave_engine_fns(body, ("debug", ("compare", node_vals.addr() + j2, (round, st + j2, "node_val"))), node_vals.get_next_read(j2), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
             
-            slot = ("^", inp_values + j1, inp_values + j1, node_vals + j1)
-            loads[j1-i] = self.interleave_engine_fns(body, ("alu", slot), loads[j1-i], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+            slot = ("^", inp_values.addr() + j1, inp_values.addr() + j1, node_vals.addr() + j1)
+            res = self.interleave_engine_fns(body, ("alu", slot), max(inp_values.get_next_read_write(j1), node_vals.get_next_read(j1)), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+            inp_values.update_last_read_write(res - 1, j1)
+            node_vals.update_last_read(res - 1, j1)
 
-            slot = ("^", inp_values + j2, inp_values + j2, node_vals + j2)
-            loads[j2-i] = self.interleave_engine_fns(body, ("alu", slot), loads[j2-i], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
-
-
-        # check node values indexed in mini (parallel) batch
-        # for j in range(i,i+VLEN):
-        #     self.interleave_engine_fns(body, ("debug", ("compare", node_vals + j, (round, st + j, "node_val"))), loads[j-i], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
-
-        # perform XOR with node values in parallel
-        # slots = ("^", inp_values + i, inp_values + i, node_vals + i)
-        # res_instr_idx = self.interleave_engine_fns(body, ("valu", slots), max(loads), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
-
-        if not simulate_only:
-            inp_val_instr_idxs[i // VLEN] = max(loads)
-
-        return max(loads)
-
-    def build_scratch_jump_load(self, body, i, inp_val_instr_idxs, jump_load_pointer : ScratchObjectWrapper, post_jump_load_offset : ScratchObjectWrapper, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, round, depth, st, n_tree_preload_layers, debug_info, simulate_only=False, simulated_slot_counts=None):
-        
-        # print("Simulate: ", simulate_only, "simulate slot counts:", simulated_slot_counts)
-        loads = [len(body)] * VLEN
-        for j in range(i,i+VLEN):
-
-            # after jumping, the instruction will set the jump pointer to the end of the block to enable the next jump load
-            slot = ("-", post_jump_load_offset.addr, jump_layer_offsets + depth - n_tree_preload_layers + 1, inp_indices + j)
-            self.interleave_engine_fns(body, ("alu", slot), max(inp_val_instr_idxs[i // VLEN], post_jump_load_offset.get_next_write(0)), debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
-
-            # index to correct instruction within jump lock
-            slot = ("+", jump_load_pointer.addr, jump_load_pointer.addr, inp_indices + j)
-            after_add_jump_p = self.interleave_engine_fns(body, ("alu", slot), max(inp_val_instr_idxs[i // VLEN], jump_load_pointer.get_next_write(0), jump_load_pointer.get_next_read(0)), debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
-
-            # # zero out previous node val
-            # slot = ("^", node_vals + j, node_vals + j, node_vals + j)
-            # after_zero_node_val = self.interleave_engine_fns(body, ("alu", slot), inp_val_instr_idxs[j // VLEN], debug_info)
-
-            slot = ("-", jump_load_pointer.addr, jump_load_pointer.addr, jump_layer_offsets + depth - n_tree_preload_layers)
-            after_add_jump_p = self.interleave_engine_fns(body, ("alu", slot), after_add_jump_p, debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
-
-            jump_load_data={
-                "dest" : node_vals + j,
-                "st" : in_mem_node_vals + 2**depth - 2**n_tree_preload_layers,
-                "end" : in_mem_node_vals + 2**(depth + 1) - 2**n_tree_preload_layers,
-                "post_jump_load_offset" : post_jump_load_offset.addr
-            }
-
-            # jump indirect will trigger reserving the next slot for a flow op
-            # can be synchronous with after_zero_node_val since its the jump-back instruction that loads to it
-            slot = ("jump_indirect", jump_load_pointer.addr)
-            after_jump_back = self.interleave_engine_fns(body, ("flow", slot), after_add_jump_p, debug_info, jump_load_data=jump_load_data, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
-            jump_load_pointer.update_last_write(0, after_jump_back - 2)
-            post_jump_load_offset.update_last_read(0, after_jump_back - 2)
-            loads[j-i] = after_jump_back
-
-            self.interleave_engine_fns(body, ("debug", ("compare", node_vals + j, (round, st + j, "node_val"))), loads[j-i], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
-
-            slot = ("^", inp_values + j, inp_values + j, node_vals + j)
-            loads[j-i] = self.interleave_engine_fns(body, ("alu", slot), loads[j-i], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
-
+            slot = ("^", inp_values.addr() + j2, inp_values.addr() + j2, node_vals.addr() + j2)
+            res = self.interleave_engine_fns(body, ("alu", slot), max(inp_values.get_next_read_write(j2), node_vals.get_next_read(j2)), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+            inp_values.update_last_read_write(res - 1, j2)
+            node_vals.update_last_read(res - 1, j2)
 
         # check node values indexed in mini (parallel) batch
         # for j in range(i,i+VLEN):
@@ -398,16 +391,11 @@ class KernelBuilder:
         # slots = ("^", inp_values + i, inp_values + i, node_vals + i)
         # res_instr_idx = self.interleave_engine_fns(body, ("valu", slots), max(loads), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
 
-        if not simulate_only:
-            inp_val_instr_idxs[i // VLEN] = max(loads)
-
-        return max(loads)
+        return res
     
-    def build_apply_node_val_mem(self, body, i, inp_val_instr_idxs, inp_indices, inp_values, node_vals, round, st, debug_info, simulate_only=False, simulated_slot_counts=None):
+    def build_apply_node_val_mem(self, body, i, inp_indices : ScratchObjectWrapper, inp_values : ScratchObjectWrapper, node_vals : ScratchObjectWrapper, round, st, debug_info, simulate_only=False, simulated_slot_counts=None):
         
         # print("Mem Simulate: ", simulate_only, "simulate slot counts:", simulated_slot_counts)
-
-        loads = [len(body)] * VLEN
 
         # for i in range(0, end - st, VLEN):
         #     slots = [("+", inp_indices + i, inp_indices + i, forest_p_const_vlen)]
@@ -415,9 +403,10 @@ class KernelBuilder:
 
         # load node values in node_vals
         for j in range(i,i+VLEN):
-            slots = ("load", node_vals + j, inp_indices + j)
-            loads[j-i] = self.interleave_engine_fns(body, ("load", slots), inp_val_instr_idxs[i // VLEN], debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
-
+            slots = ("load", node_vals.addr() + j, inp_indices.addr() + j)
+            res = self.interleave_engine_fns(body, ("load", slots), max(node_vals.get_next_write(j), inp_indices.get_next_read(j)), debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+            node_vals.update_last_write(res - 1, j)
+            inp_indices.update_last_read(res - 1, j)
         # last_loads.append(last_load)
 
         # check node values indexed in mini (parallel) batch
@@ -428,17 +417,17 @@ class KernelBuilder:
         # slots = ("^", inp_values + i, inp_values + i, node_vals + i)
         # res_instr_idx = self.interleave_engine_fns(body, ("valu", slots), max(loads), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
         for j in range(i,i+VLEN):
-            slots = ("^", inp_values + j, inp_values + j, node_vals + j)
-            res_instr_idx = self.interleave_engine_fns(body, ("alu", slots), loads[j-i], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
-        
-        if not simulate_only:
-            inp_val_instr_idxs[i // VLEN] = res_instr_idx
+            slots = ("^", inp_values.addr() + j, inp_values.addr() + j, node_vals.addr() + j)
+            res = self.interleave_engine_fns(body, ("alu", slots), max(inp_values.get_next_read_write(j), node_vals.get_next_read(j)), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+            inp_values.update_last_read_write(res - 1, j)
+            node_vals.update_last_read(res - 1, j)
+
         # # broadcast forest location in mem
         # for i in range(0, end - st, VLEN):
         #     slots = [("-", inp_indices + i, inp_indices + i, forest_p_const_vlen)]
         #     inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), last_loads[i // VLEN])
 
-        return res_instr_idx
+        return res
     
     # after this call, should have vectors for first six indices / values
     def build_load_tree_vals(self, body, after_init_vars_instr, tree_vals_vlen, tree_val_zero_base_vlen, consts_vlen, last_hash_const_vlen1, after_hash_const_idx):
@@ -664,11 +653,15 @@ class KernelBuilder:
         tree_val_zero_base_vlen = self.alloc_scratch("tree_val_zero_base_vlen", length=VLEN) # unmodified by xor trick
         tree_vals_vlen = [self.alloc_scratch(f"tree_val_{i}_vlen", length=VLEN) for i in range(n_tree_preload_vecs)]
         inp_val_offsets = self.alloc_scratch("inp_val_offsets", length=n_val_offsets)
-        node_vals = self.alloc_scratch("node_vals", length=parallel_vals)
-        tmp1_parallel = self.alloc_scratch("tmp1_parallel", length=parallel_vals)
+        # node_vals = self.alloc_scratch("node_vals", length=parallel_vals)
+        node_vals = self.create_wrapped_scratch_data("node_vals", length=parallel_vals)
+        # tmp1_parallel = self.alloc_scratch("tmp1_parallel", length=parallel_vals)
+        tmp1_parallel = self.create_wrapped_scratch_data("tmp1_parallel", length=parallel_vals)
         # Load inputs and forest values into memory to avoid duplicate loads/stores
-        inp_indices = self.alloc_scratch("inp_indices", length=parallel_vals)
-        inp_values = self.alloc_scratch("inp_values", length=parallel_vals)
+        # inp_indices = self.alloc_scratch("inp_indices", length=parallel_vals)
+        inp_indices = self.create_wrapped_scratch_data("inp_indices", length=parallel_vals)
+        # inp_values = self.alloc_scratch("inp_values", length=parallel_vals)
+        inp_values = self.create_wrapped_scratch_data("inp_values", length=parallel_vals)
 
         body = []  # array of instructions
 
@@ -779,7 +772,6 @@ class KernelBuilder:
         # assert parallel_vals < SLOT_LIMITS["debug"] , "Parallel vals must be less than debug slot limit to avoid overflowing debug info"
         chunk_incr = self.alloc_scratch("chunk_incr")
         after_chunk_incr_idx = self.interleave_engine_fns(body, ("load", ("const", chunk_incr, parallel_vals)), 0)
-
         after_load_tree_vals_instr = self.build_load_tree_vals(body, max(after_init_vars_instr,after_vlen_consts_init), tree_vals_vlen, tree_val_zero_base_vlen, consts_vlen, hash_consts_vlen[-1][0], after_hash_consts_idx[-1][0])
 
         # can potentially optimize this using alus
@@ -812,15 +804,15 @@ class KernelBuilder:
             slot = ("*", jump_layer_lens_sq + i, jump_layer_lens + i, jump_layer_lens + i)
             after_jump_layer_lens_calc[i] = self.interleave_engine_fns(body, ("alu", slot), after_jump_layer_lens_calc[i])
 
-        slot = ("const", jump_load_pointer.addr, last_non_jump_instr)
+        slot = ("const", jump_load_pointer.addr(), last_non_jump_instr)
         after_jump_load_setup = self.interleave_engine_fns(body, ("load", slot), 0)
         jump_load_pointer.update_last_write(after_jump_load_setup-1)
 
-        slot = ("+", post_jump_load_offset.addr, post_jump_load_offset.addr, jump_load_pointer.addr)
+        slot = ("+", post_jump_load_offset.addr(), post_jump_load_offset.addr(), jump_load_pointer.addr())
         res = self.interleave_engine_fns(body, ("alu", slot), jump_load_pointer.get_next_read())
         post_jump_load_offset.update_last_read_write(res-1)
 
-        slot = ("+", jump_load_pointer_alt.addr, jump_load_pointer_alt.addr, jump_load_pointer.addr)
+        slot = ("+", jump_load_pointer_alt.addr(), jump_load_pointer_alt.addr(), jump_load_pointer.addr())
         res = self.interleave_engine_fns(body, ("alu", slot), max(jump_load_pointer.get_next_read(), after_second_consts_instr))
         jump_load_pointer_alt.update_last_read_write(res - 1)
         jump_load_pointer.update_last_read(res - 1)
@@ -873,31 +865,32 @@ class KernelBuilder:
                 # print("Routing total count: ", total_routed_count, " jump loaded count: ", jump_loaded_count, " decision:", should_jump_load)
                 return should_jump_load
             
-            def process_vector(round, i, inp_val_instr_idxs):
+            def process_vector(round, i):
                 debug_info = {"round": round, "st": st, "i": i}
                 depth = round % (forest_height + 1)
 
                 if round == 0:
                     if ci > 0:
                         slots = ("+", inp_val_offsets + i // VLEN, inp_val_offsets + i // VLEN, chunk_incr)
-                        inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("alu", slots), inp_val_instr_idxs[i // VLEN])
+                        after_init_offsets_instrs[i // VLEN] = self.interleave_engine_fns(body, ("alu", slots), max(after_init_offsets_instrs[i // VLEN]))
 
-                    slots = ("vbroadcast", inp_indices + i, forest_consts_vlen[0])
-                    next_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slots), inp_val_instr_idxs[i // VLEN])
+                    slots = ("vbroadcast", inp_indices.addr() + i, forest_consts_vlen[0])
+                    res = self.interleave_engine_fns(body, ("valu", slots), inp_indices.get_next_write(i, by_vlen=True))
+                    inp_indices.update_last_write(res - 1, i, by_vlen=True)
 
-                    slots = ("vload", inp_values + i, inp_val_offsets + i // VLEN)
-                    inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("load", slots), inp_val_instr_idxs[i // VLEN])
-
-                    inp_val_instr_idxs[i // VLEN] = max(next_instr_idxs[i // VLEN], inp_val_instr_idxs[i // VLEN])
+                    slots = ("vload", inp_values.addr() + i, inp_val_offsets + i // VLEN)
+                    res = self.interleave_engine_fns(body, ("load", slots), max(inp_values.get_next_write(i, by_vlen=True), after_init_offsets_instrs[i // VLEN]))
+                    after_init_offsets_instrs[i // VLEN] = res
+                    inp_values.update_last_write(res - 1, i, by_vlen=True)
 
                 # check input indices / values indexed in full batch
                 for j in range(i,i+VLEN):
-                    self.interleave_engine_fns(body, ("debug", ("compare", inp_indices + j, (round, st + j, "idx"))), inp_val_instr_idxs[i // VLEN])
-                    self.interleave_engine_fns(body, ("debug", ("compare", inp_values + j, (round, st + j, "val"))), inp_val_instr_idxs[i // VLEN])
+                    self.interleave_engine_fns(body, ("debug", ("compare", inp_indices.addr() + j, (round, st + j, "idx"))), inp_indices.get_next_read(j))
+                    self.interleave_engine_fns(body, ("debug", ("compare", inp_values.addr() + j, (round, st + j, "val"))), inp_values.get_next_read(j))
 
                 if depth == 0:
                     tree_val_zero_vlen = tree_val_zero_base_vlen if round == 0 else tree_vals_vlen[0]
-                    inp_val_instr_idxs = self.build_apply_node_val_root(body, i, inp_val_instr_idxs, inp_values, tree_val_zero_vlen)
+                    inp_val_instr_idxs = self.build_apply_node_val_root(body, i, inp_values, tree_val_zero_vlen)
                 # elif depth < n_tree_preload_layers:
                 #     self.build_apply_node_val_masked(body, i, inp_val_instr_idxs, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, forest_consts_vlen, consts_vlen, depth)
                 # elif depth < n_jump_layers_enabled + n_tree_preload_layers and st == 0 and i == 0:
@@ -909,22 +902,22 @@ class KernelBuilder:
                     did_skip_final_xor = depth < n_tree_preload_layers + n_jump_layers_enabled and round > 0
 
                     simulated_counts_mem = defaultdict(lambda: defaultdict(int))
-                    mem_res_instr_idx = self.build_apply_node_val_mem(body, i, inp_val_instr_idxs, inp_indices, inp_values, node_vals, round, st, debug_info, simulate_only=True, simulated_slot_counts=simulated_counts_mem)
+                    mem_res_instr_idx = self.build_apply_node_val_mem(body, i, inp_indices.dcopy(), inp_values.dcopy(), node_vals.dcopy(), round, st, debug_info, simulate_only=True, simulated_slot_counts=simulated_counts_mem)
                     if did_skip_final_xor:
-                        slot = ("^", inp_values + i, inp_values + i, hash_consts_vlen[-1][0])
+                        slot = ("^", inp_values.addr() + i, inp_values.addr() + i, hash_consts_vlen[-1][0])
                         mem_res_instr_idx = self.interleave_engine_fns(body, ("valu", slot), max(mem_res_instr_idx, after_hash_consts_idx[-1][0]), simulate_only=True, simulated_slot_counts=simulated_counts_mem)
 
                     first_idx = mem_res_instr_idx
                     routing_decision = LoadRouting.FROM_MEM_LOAD
 
                     if n_tree_preload_layers <= depth < n_tree_preload_layers + n_jump_layers_enabled:
-                        tmp_jump1_copy = copy.deepcopy(tmp_jump1)
-                        tmp_jump2_copy = copy.deepcopy(tmp_jump2)
-                        jump_load_pointer_copy = copy.deepcopy(jump_load_pointer)
-                        jump_load_pointer_alt_copy = copy.deepcopy(jump_load_pointer_alt)
-                        post_jump_load_offset_copy = copy.deepcopy(post_jump_load_offset)
+                        # tmp_jump1_copy = copy.deepcopy(tmp_jump1)
+                        # tmp_jump2_copy = copy.deepcopy(tmp_jump2)
+                        # jump_load_pointer_copy = copy.deepcopy(jump_load_pointer)
+                        # jump_load_pointer_alt_copy = copy.deepcopy(jump_load_pointer_alt)
+                        # post_jump_load_offset_copy = copy.deepcopy(post_jump_load_offset)
                         simulated_counts_jump = defaultdict(lambda: defaultdict(int))
-                        jump_res_instr_idx = self.build_double_scratch_jump_load(body, i, inp_val_instr_idxs, tmp_jump1_copy, tmp_jump2_copy, jump_load_pointer_copy, jump_load_pointer_alt_copy, post_jump_load_offset_copy, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, jump_layer_lens, jump_layer_lens_sq, consts[0], round, depth, st, n_tree_preload_layers, debug_info, simulate_only=True, simulated_slot_counts=simulated_counts_jump)
+                        jump_res_instr_idx = self.build_double_scratch_jump_load(body, i, tmp_jump1.dcopy(), tmp_jump2.dcopy(), jump_load_pointer.dcopy(), jump_load_pointer_alt.dcopy(), post_jump_load_offset.dcopy(), inp_indices.dcopy(), inp_values.dcopy(), node_vals.dcopy(), in_mem_node_vals, jump_layer_offsets, jump_layer_lens, jump_layer_lens_sq, consts[0], round, depth, st, n_tree_preload_layers, debug_info, simulate_only=True, simulated_slot_counts=simulated_counts_jump)
                         
                         # if can_apply_node_val_masked:
                         #     slot = ("^", inp_values + i, inp_values + i, hash_consts_vlen[-1][0])
@@ -938,53 +931,53 @@ class KernelBuilder:
 
                     if can_apply_node_val_masked:
                         simulated_counts_mask = defaultdict(lambda: defaultdict(int))
-                        mask_res_instr_idx = self.build_apply_node_val_masked(body, i, inp_val_instr_idxs, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, forest_consts_vlen, consts_vlen, depth, simulate_only=True, simulated_slot_counts=simulated_counts_mask)
+                        mask_res_instr_idx = self.build_apply_node_val_masked(body, i, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, forest_consts_vlen, consts_vlen, depth, simulate_only=True, simulated_slot_counts=simulated_counts_mask)
                         if mask_res_instr_idx < first_idx + 1:
                             first_idx = mask_res_instr_idx
                             routing_decision = LoadRouting.MASKED_LOAD
 
                     match routing_decision:
                         case LoadRouting.FROM_MEM_LOAD:
-                            self.build_apply_node_val_mem(body, i, inp_val_instr_idxs, inp_indices, inp_values, node_vals, round, st, debug_info, simulate_only=False)
-                        case LoadRouting.JUMP_LOAD_1X:
-                            self.build_scratch_jump_load(body, i, inp_val_instr_idxs, jump_load_pointer, post_jump_load_offset, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, round, depth, st, n_tree_preload_layers, debug_info, simulate_only=False)
+                            self.build_apply_node_val_mem(body, i, inp_indices, inp_values, node_vals, round, st, debug_info, simulate_only=False)
                         case LoadRouting.JUMP_LOAD_2X:
-                            self.build_double_scratch_jump_load(body, i, inp_val_instr_idxs, tmp_jump1, tmp_jump2, jump_load_pointer, jump_load_pointer_alt, post_jump_load_offset, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, jump_layer_lens, jump_layer_lens_sq, consts[0], round, depth, st, n_tree_preload_layers, debug_info)
+                            self.build_double_scratch_jump_load(body, i, tmp_jump1, tmp_jump2, jump_load_pointer, jump_load_pointer_alt, post_jump_load_offset, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, jump_layer_lens, jump_layer_lens_sq, consts[0], round, depth, st, n_tree_preload_layers, debug_info)
                         case LoadRouting.MASKED_LOAD:
-                            self.build_apply_node_val_masked(body, i, inp_val_instr_idxs, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, forest_consts_vlen, consts_vlen, depth, simulate_only=False)
+                            self.build_apply_node_val_masked(body, i, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, forest_consts_vlen, consts_vlen, depth, simulate_only=False)
                         case _:
                             raise NotImplementedError("WTF impossible routing decision")
                         
                     # need to apply XOR as expected
                     if did_skip_final_xor and routing_decision not in (LoadRouting.MASKED_LOAD, LoadRouting.JUMP_LOAD_2X):
-                        slot = ("^", inp_values + i, inp_values + i, hash_consts_vlen[-1][0])
-                        inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slot), max(inp_val_instr_idxs[i // VLEN], after_hash_consts_idx[-1][0]))
+                        slot = ("^", inp_values.addr() + i, inp_values.addr() + i, hash_consts_vlen[-1][0])
+                        res = self.interleave_engine_fns(body, ("valu", slot), max(inp_values.get_next_read_write(i, by_vlen=True), after_hash_consts_idx[-1][0]))
+                        inp_values.update_last_read_write(res - 1, i, by_vlen=True)
 
                     # print("routing vector load to jump: ", b, " jump res idx: ", jump_res_instr_idx, " mem_res_instr_idx: ", mem_res_instr_idx)
 
                 should_skip_final_xor = (round + 1) % (forest_height + 1) < n_tree_preload_layers + n_jump_layers_enabled
-                inp_val_instr_idxs = self.build_hash_opt(body, i, inp_val_instr_idxs, inp_values, tmp1_parallel, hash_consts_vlen, round, st, end, debug_info, should_skip_final_xor)
+                self.build_hash_opt(body, i, inp_values, tmp1_parallel, hash_consts_vlen, round, st, end, debug_info, should_skip_final_xor)
                 for j in range(i,i+VLEN):
-                    self.interleave_engine_fns(body,("debug", ("compare", inp_values + j, (round, st + j, "hashed_val"))), inp_val_instr_idxs[i // VLEN])
+                    self.interleave_engine_fns(body,("debug", ("compare", inp_values.addr() + j, (round, st + j, "hashed_val"))), inp_values.get_next_read(j))
 
                 
                 if round == rounds - 1:
                     # use vstore operations to write the inputs back to memory
-                    slots = ("vstore", inp_val_offsets + (i // VLEN), inp_values + i)
-                    inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("store", slots), inp_val_instr_idxs[i // VLEN])
+                    slots = ("vstore", inp_val_offsets + (i // VLEN), inp_values.addr() + i)
+                    res = self.interleave_engine_fns(body, ("store", slots), inp_values.get_next_read(i, by_vlen=True))
+                    inp_values.update_last_read(res - 1, i, by_vlen=True)
 
                     # no need for index update on last update
                     return
 
                 # if at full depth, set idx to 0
                 if (round + 1) % (forest_height + 1) == 0:
-                    inp_val_instr_idxs = self.build_idx_wrap(body, i, inp_val_instr_idxs, inp_indices, end - st, forest_consts_vlen[0])
+                    self.build_idx_wrap(body, i, inp_indices, end - st, forest_consts_vlen[0])
                 # idx = 2*idx + (1 if val % 2 == 0 else 2)
                 else:
-                    inp_val_instr_idxs = self.build_idx_next(body, i, inp_val_instr_idxs, inp_indices, inp_values, tmp1_parallel, end - st, forest_const_m1_vlen, consts_vlen[1], consts_vlen[2])
+                    self.build_idx_next(body, i, inp_indices, inp_values, tmp1_parallel, end - st, forest_const_m1_vlen, consts_vlen[1], consts_vlen[2])
 
                 for j in range(i,i+VLEN):
-                    self.interleave_engine_fns(body,("debug", ("compare", inp_indices + j, (round, st + j, "wrapped_idx"))), inp_val_instr_idxs[i // VLEN])
+                    self.interleave_engine_fns(body,("debug", ("compare", inp_indices.addr() + j, (round, st + j, "wrapped_idx"))), inp_indices.get_next_read(j))
 
                 # on last round, can potentially skip index update
             
@@ -997,11 +990,11 @@ class KernelBuilder:
                 if process_algo == "chunk":
                     for round in round_range:
                         for i in range(0,chunk_len,VLEN):
-                            process_vector(round,i, inp_val_instr_idxs)
+                            process_vector(round,i)
                 elif process_algo == "vector":
                     for i in range(0,chunk_len,VLEN):
                         for round in round_range:
-                            process_vector(round,i, inp_val_instr_idxs)
+                            process_vector(round,i)
 
 
         print("Total scratch used: ", self.scratch_ptr, "remaining: ", SCRATCH_SIZE - self.scratch_ptr)
