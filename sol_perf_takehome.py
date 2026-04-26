@@ -284,7 +284,7 @@ class KernelBuilder:
             post_jump_load_offset.update_last_read(0, after_jump_back - 2)
             loads[j-i] = after_jump_back
 
-            # self.interleave_engine_fns(body, ("debug", ("compare", node_vals + j, (round, st + j, "node_val"))), loads[j-i], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+            self.interleave_engine_fns(body, ("debug", ("compare", node_vals + j, (round, st + j, "node_val"))), loads[j-i], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
 
             slot = ("^", inp_values + j, inp_values + j, node_vals + j)
             loads[j-i] = self.interleave_engine_fns(body, ("alu", slot), loads[j-i], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
@@ -321,8 +321,8 @@ class KernelBuilder:
         # last_loads.append(last_load)
 
         # check node values indexed in mini (parallel) batch
-        # for j in range(i,i+VLEN):
-        #     self.interleave_engine_fns(body, ("debug", ("compare", node_vals + j, (round, st + j, "node_val"))), loads[j-i], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+        for j in range(i,i+VLEN):
+            self.interleave_engine_fns(body, ("debug", ("compare", node_vals + j, (round, st + j, "node_val"))), loads[j-i], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
 
         # perform XOR with node values in parallel
         # slots = ("^", inp_values + i, inp_values + i, node_vals + i)
