@@ -256,7 +256,7 @@ class KernelBuilder:
 
         return res_instr_idx
 
-    def build_double_scratch_jump_load(self, body, i, inp_val_instr_idxs, tmp_jump1 : ScratchObjectWrapper, tmp_jump2 : ScratchObjectWrapper, jump_load_pointer : ScratchObjectWrapper, post_jump_load_offset : ScratchObjectWrapper, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, jump_layer_lens, jump_layer_lens_sq, zero_const, round, depth, st, n_tree_preload_layers, debug_info, simulate_only=False, simulated_slot_counts=None):
+    def build_double_scratch_jump_load(self, body, i, inp_val_instr_idxs, tmp_jump1 : ScratchObjectWrapper, tmp_jump2 : ScratchObjectWrapper, jump_load_pointer : ScratchObjectWrapper, jump_load_pointer_alt : ScratchObjectWrapper, post_jump_load_offset : ScratchObjectWrapper, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, jump_layer_lens, jump_layer_lens_sq, zero_const, round, depth, st, n_tree_preload_layers, debug_info, simulate_only=False, simulated_slot_counts=None):
         
         loads = [len(body)] * VLEN
         for j1 in range(i, i+VLEN, 2):
@@ -283,16 +283,29 @@ class KernelBuilder:
             tmp_jump2.update_last_read_write(res - 1)
             tmp_jump1.update_last_read(res - 1)
 
+            # first_jump_load_pointer = jump_load_pointer
+            if jump_load_pointer_alt.get_next_read_write() < jump_load_pointer.get_next_read_write():
+                first_jump_load_pointer = jump_load_pointer_alt
+                next_jump_load_pointer = jump_load_pointer
+            else:
+                first_jump_load_pointer = jump_load_pointer
+                next_jump_load_pointer = jump_load_pointer_alt
+
             # jump_pointer += ind1
-            slot = ("+", jump_load_pointer.addr, jump_load_pointer.addr, tmp_jump2.addr)
-            res = self.interleave_engine_fns(body, ("alu", slot), max(jump_load_pointer.get_next_read_write(), tmp_jump2.get_next_read()), debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
-            jump_load_pointer.update_last_read_write(res - 1)
+            slot = ("+", first_jump_load_pointer.addr, first_jump_load_pointer.addr, tmp_jump2.addr)
+            res = self.interleave_engine_fns(body, ("alu", slot), max(first_jump_load_pointer.get_next_read_write(), tmp_jump2.get_next_read()), debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+            first_jump_load_pointer.update_last_read_write(res - 1)
             tmp_jump2.update_last_read(res - 1)
 
             # set post jump pointer to layer_len ** 2
             slot = ("+", post_jump_load_offset.addr, post_jump_load_offset.addr, jump_layer_lens_sq + depth - n_tree_preload_layers)
             res = self.interleave_engine_fns(body, ("alu", slot), post_jump_load_offset.get_next_read_write(), debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
             post_jump_load_offset.update_last_read_write(res - 1)
+
+            # update alternative jump load pointer directly
+            slot = ("+", next_jump_load_pointer.addr, next_jump_load_pointer.addr, jump_layer_lens_sq + depth - n_tree_preload_layers)
+            res = self.interleave_engine_fns(body, ("alu", slot), next_jump_load_pointer.get_next_read_write(), debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+            next_jump_load_pointer.update_last_read_write(res - 1)
 
             jump_load_data={
                 "dest1" : node_vals + j1,
@@ -305,9 +318,9 @@ class KernelBuilder:
 
             # jump indirect will trigger reserving the next slot for a flow op
             # can be synchronous with after_zero_node_val since its the jump-back instruction that loads to it
-            slot = ("jump_indirect", jump_load_pointer.addr)
-            after_jump_back = self.interleave_engine_fns(body, ("flow", slot), jump_load_pointer.get_next_read(), debug_info, jump_load_data=jump_load_data, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
-            jump_load_pointer.update_last_write(after_jump_back - 1)
+            slot = ("jump_indirect", first_jump_load_pointer.addr)
+            after_jump_back = self.interleave_engine_fns(body, ("flow", slot), max(first_jump_load_pointer.get_next_read_write(), post_jump_load_offset.get_next_read()), debug_info, jump_load_data=jump_load_data, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+            first_jump_load_pointer.update_last_read_write(after_jump_back - 1)
             post_jump_load_offset.update_last_read(after_jump_back - 1)
             loads[j1-i] = after_jump_back
             loads[j2-i] = after_jump_back
@@ -639,6 +652,7 @@ class KernelBuilder:
         jump_layer_offsets = self.alloc_scratch("jump_layer_offsets", length=n_jump_layers_enabled + 1)
         # jump_load_pointer = self.alloc_scratch("jump_load_pointer")
         jump_load_pointer = self.create_wrapped_scratch_data("jump_load_pointer", length=1)
+        jump_load_pointer_alt = self.create_wrapped_scratch_data("jump_load_pointer_alt", length=1)
         post_jump_load_offset = self.create_wrapped_scratch_data("post_jump_load_offset", length=1)
         tmp_jump1 = self.create_wrapped_scratch_data("tmp_jump1", length=1)
         tmp_jump2 = self.create_wrapped_scratch_data("tmp_jump2", length=1)
@@ -806,6 +820,11 @@ class KernelBuilder:
         res = self.interleave_engine_fns(body, ("alu", slot), jump_load_pointer.get_next_read())
         post_jump_load_offset.update_last_read_write(res-1)
 
+        slot = ("+", jump_load_pointer_alt.addr, jump_load_pointer_alt.addr, jump_load_pointer.addr)
+        res = self.interleave_engine_fns(body, ("alu", slot), max(jump_load_pointer.get_next_read(), after_second_consts_instr))
+        jump_load_pointer_alt.update_last_read_write(res - 1)
+        jump_load_pointer.update_last_read(res - 1)
+
         # JUMP in-mem setup
         after_init_jump_offsets = [len(body)] * n_jump_offsets
         for i in range(0, n_jump_offsets):
@@ -897,9 +916,10 @@ class KernelBuilder:
                     tmp_jump1_copy = copy.deepcopy(tmp_jump1)
                     tmp_jump2_copy = copy.deepcopy(tmp_jump2)
                     jump_load_pointer_copy = copy.deepcopy(jump_load_pointer)
+                    jump_load_pointer_alt_copy = copy.deepcopy(jump_load_pointer_alt)
                     post_jump_load_offset_copy = copy.deepcopy(post_jump_load_offset)
                     simulated_counts_jump = defaultdict(lambda: defaultdict(int))
-                    jump_res_instr_idx = self.build_double_scratch_jump_load(body, i, inp_val_instr_idxs, tmp_jump1_copy, tmp_jump2_copy, jump_load_pointer_copy, post_jump_load_offset_copy, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, jump_layer_lens, jump_layer_lens_sq, consts[0], round, depth, st, n_tree_preload_layers, debug_info, simulate_only=True, simulated_slot_counts=simulated_counts_jump)
+                    jump_res_instr_idx = self.build_double_scratch_jump_load(body, i, inp_val_instr_idxs, tmp_jump1_copy, tmp_jump2_copy, jump_load_pointer_copy, jump_load_pointer_alt_copy, post_jump_load_offset_copy, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, jump_layer_lens, jump_layer_lens_sq, consts[0], round, depth, st, n_tree_preload_layers, debug_info, simulate_only=True, simulated_slot_counts=simulated_counts_jump)
                     
                     if can_apply_node_val_masked:
                         slot = ("^", inp_values + i, inp_values + i, hash_consts_vlen[-1][0])
@@ -924,7 +944,7 @@ class KernelBuilder:
                         case LoadRouting.JUMP_LOAD_1X:
                             self.build_scratch_jump_load(body, i, inp_val_instr_idxs, jump_load_pointer, post_jump_load_offset, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, round, depth, st, n_tree_preload_layers, debug_info, simulate_only=False)
                         case LoadRouting.JUMP_LOAD_2X:
-                            self.build_double_scratch_jump_load(body, i, inp_val_instr_idxs, tmp_jump1, tmp_jump2, jump_load_pointer, post_jump_load_offset, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, jump_layer_lens, jump_layer_lens_sq, consts[0], round, depth, st, n_tree_preload_layers, debug_info)
+                            self.build_double_scratch_jump_load(body, i, inp_val_instr_idxs, tmp_jump1, tmp_jump2, jump_load_pointer, jump_load_pointer_alt, post_jump_load_offset, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, jump_layer_lens, jump_layer_lens_sq, consts[0], round, depth, st, n_tree_preload_layers, debug_info)
                         case LoadRouting.MASKED_LOAD:
                             self.build_apply_node_val_masked(body, i, inp_val_instr_idxs, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, forest_consts_vlen, consts_vlen, depth, simulate_only=False)
                         case _:
