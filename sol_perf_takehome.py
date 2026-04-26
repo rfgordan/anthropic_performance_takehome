@@ -898,8 +898,8 @@ class KernelBuilder:
                 if depth == 0:
                     tree_val_zero_vlen = tree_val_zero_base_vlen if round == 0 else tree_vals_vlen[0]
                     inp_val_instr_idxs = self.build_apply_node_val_root(body, i, inp_val_instr_idxs, inp_values, tree_val_zero_vlen)
-                elif depth < n_tree_preload_layers:
-                    self.build_apply_node_val_masked(body, i, inp_val_instr_idxs, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, forest_consts_vlen, consts_vlen, depth)
+                # elif depth < n_tree_preload_layers:
+                #     self.build_apply_node_val_masked(body, i, inp_val_instr_idxs, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, forest_consts_vlen, consts_vlen, depth)
                 # elif depth < n_jump_layers_enabled + n_tree_preload_layers and st == 0 and i == 0:
                 #     self.build_double_scratch_jump_load(body, i, inp_val_instr_idxs, tmp_jump1, tmp_jump2, jump_load_pointer, jump_load_pointer_alt, post_jump_load_offset, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, jump_layer_lens, jump_layer_lens_sq, consts[0], round, depth, st, n_tree_preload_layers, debug_info)
                 # elif True:
@@ -936,12 +936,12 @@ class KernelBuilder:
 
                     # routing for the masked stuff has some non-deterministic bug and doesnt increase speed
 
-                    # if can_apply_node_val_masked:
-                    #     simulated_counts_mask = defaultdict(lambda: defaultdict(int))
-                    #     mask_res_instr_idx = self.build_apply_node_val_masked(body, i, inp_val_instr_idxs, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, forest_consts_vlen, consts_vlen, depth, simulate_only=True, simulated_slot_counts=simulated_counts_mask)
-                    #     if mask_res_instr_idx < first_idx + 10:
-                    #         first_idx = mask_res_instr_idx
-                    #         routing_decision = LoadRouting.MASKED_LOAD
+                    if can_apply_node_val_masked:
+                        simulated_counts_mask = defaultdict(lambda: defaultdict(int))
+                        mask_res_instr_idx = self.build_apply_node_val_masked(body, i, inp_val_instr_idxs, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, forest_consts_vlen, consts_vlen, depth, simulate_only=True, simulated_slot_counts=simulated_counts_mask)
+                        if mask_res_instr_idx < first_idx + 1:
+                            first_idx = mask_res_instr_idx
+                            routing_decision = LoadRouting.MASKED_LOAD
 
                     match routing_decision:
                         case LoadRouting.FROM_MEM_LOAD:
