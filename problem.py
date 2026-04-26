@@ -582,7 +582,7 @@ def reference_kernel2(mem: list[int], trace: dict[Any, int] = {}):
 
     def should_skip_last_xor(h):
         next_depth = (h + 1) % (forest_height + 1)
-        return next_depth < 3 and h >= 0
+        return next_depth < (3 + 4) and h >= 0
     
     yield mem
     for h in range(rounds):

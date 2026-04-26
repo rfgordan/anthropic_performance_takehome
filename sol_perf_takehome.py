@@ -421,8 +421,8 @@ class KernelBuilder:
         # last_loads.append(last_load)
 
         # check node values indexed in mini (parallel) batch
-        for j in range(i,i+VLEN):
-            self.interleave_engine_fns(body, ("debug", ("compare", node_vals + j, (round, st + j, "node_val"))), loads[j-i], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+        # for j in range(i,i+VLEN):
+        #     self.interleave_engine_fns(body, ("debug", ("compare", node_vals + j, (round, st + j, "node_val"))), loads[j-i], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
 
         # perform XOR with node values in parallel
         # slots = ("^", inp_values + i, inp_values + i, node_vals + i)
@@ -838,6 +838,9 @@ class KernelBuilder:
             slot = ("vload", in_mem_node_vals + i * VLEN, jump_offsets + i)
             after_init_jump_offsets[i] = self.interleave_engine_fns(body, ("load", slot), after_init_jump_offsets[i])
 
+            slot = ("^", in_mem_node_vals + i * VLEN, in_mem_node_vals + i * VLEN, hash_consts_vlen[-1][0])
+            after_init_jump_offsets[i] = self.interleave_engine_fns(body, ("valu", slot), max(after_init_jump_offsets[i], after_hash_consts_idx[-1][0]))
+
         # inp_val_instr_idxs = [len(body)] * (parallel_vals // VLEN)
         inp_val_instr_idxs = after_init_offsets_instrs
         # node_val_instr_idxs = inp_val_instr_idxs.copy()
@@ -903,17 +906,18 @@ class KernelBuilder:
                 #     self.build_apply_node_val_mem(body, i, inp_val_instr_idxs, inp_indices, inp_values, node_vals, round, st, debug_info, simulate_only=False)
                 else:
                     can_apply_node_val_masked = depth < n_tree_preload_layers
+                    did_skip_final_xor = depth < n_tree_preload_layers + n_jump_layers_enabled and round > 0
 
                     simulated_counts_mem = defaultdict(lambda: defaultdict(int))
                     mem_res_instr_idx = self.build_apply_node_val_mem(body, i, inp_val_instr_idxs, inp_indices, inp_values, node_vals, round, st, debug_info, simulate_only=True, simulated_slot_counts=simulated_counts_mem)
-                    if can_apply_node_val_masked:
+                    if did_skip_final_xor:
                         slot = ("^", inp_values + i, inp_values + i, hash_consts_vlen[-1][0])
                         mem_res_instr_idx = self.interleave_engine_fns(body, ("valu", slot), max(mem_res_instr_idx, after_hash_consts_idx[-1][0]), simulate_only=True, simulated_slot_counts=simulated_counts_mem)
 
                     first_idx = mem_res_instr_idx
                     routing_decision = LoadRouting.FROM_MEM_LOAD
 
-                    if depth < n_tree_preload_layers + n_jump_layers_enabled:
+                    if n_tree_preload_layers <= depth < n_tree_preload_layers + n_jump_layers_enabled:
                         tmp_jump1_copy = copy.deepcopy(tmp_jump1)
                         tmp_jump2_copy = copy.deepcopy(tmp_jump2)
                         jump_load_pointer_copy = copy.deepcopy(jump_load_pointer)
@@ -922,9 +926,9 @@ class KernelBuilder:
                         simulated_counts_jump = defaultdict(lambda: defaultdict(int))
                         jump_res_instr_idx = self.build_double_scratch_jump_load(body, i, inp_val_instr_idxs, tmp_jump1_copy, tmp_jump2_copy, jump_load_pointer_copy, jump_load_pointer_alt_copy, post_jump_load_offset_copy, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, jump_layer_lens, jump_layer_lens_sq, consts[0], round, depth, st, n_tree_preload_layers, debug_info, simulate_only=True, simulated_slot_counts=simulated_counts_jump)
                         
-                        if can_apply_node_val_masked:
-                            slot = ("^", inp_values + i, inp_values + i, hash_consts_vlen[-1][0])
-                            jump_res_instr_idx = self.interleave_engine_fns(body, ("valu", slot), max(jump_res_instr_idx, after_hash_consts_idx[-1][0]), simulate_only=True, simulated_slot_counts=simulated_counts_jump)
+                        # if can_apply_node_val_masked:
+                        #     slot = ("^", inp_values + i, inp_values + i, hash_consts_vlen[-1][0])
+                        #     jump_res_instr_idx = self.interleave_engine_fns(body, ("valu", slot), max(jump_res_instr_idx, after_hash_consts_idx[-1][0]), simulate_only=True, simulated_slot_counts=simulated_counts_jump)
                         
                         if jump_res_instr_idx < first_idx:
                             first_idx = jump_res_instr_idx
@@ -952,13 +956,13 @@ class KernelBuilder:
                             raise NotImplementedError("WTF impossible routing decision")
                         
                     # need to apply XOR as expected
-                    if can_apply_node_val_masked and routing_decision != LoadRouting.MASKED_LOAD:
+                    if did_skip_final_xor and routing_decision not in (LoadRouting.MASKED_LOAD, LoadRouting.JUMP_LOAD_2X):
                         slot = ("^", inp_values + i, inp_values + i, hash_consts_vlen[-1][0])
                         inp_val_instr_idxs[i // VLEN] = self.interleave_engine_fns(body, ("valu", slot), max(inp_val_instr_idxs[i // VLEN], after_hash_consts_idx[-1][0]))
 
                     # print("routing vector load to jump: ", b, " jump res idx: ", jump_res_instr_idx, " mem_res_instr_idx: ", mem_res_instr_idx)
 
-                should_skip_final_xor = (round + 1) % (forest_height + 1) < n_tree_preload_layers
+                should_skip_final_xor = (round + 1) % (forest_height + 1) < n_tree_preload_layers + n_jump_layers_enabled
                 inp_val_instr_idxs = self.build_hash_opt(body, i, inp_val_instr_idxs, inp_values, tmp1_parallel, hash_consts_vlen, round, st, end, debug_info, should_skip_final_xor)
                 for j in range(i,i+VLEN):
                     self.interleave_engine_fns(body,("debug", ("compare", inp_values + j, (round, st + j, "hashed_val"))), inp_val_instr_idxs[i // VLEN])
