@@ -941,7 +941,7 @@ class KernelBuilder:
                     if can_apply_node_val_masked:
                         simulated_counts_mask = defaultdict(lambda: defaultdict(int))
                         mask_res_instr_idx = self.build_apply_node_val_masked(body, i, inp_values.dcopy(), inp_indices.dcopy(), node_vals.dcopy(), tmp1_parallel.dcopy(), tree_vals_vlen, forest_consts_vlen, after_load_tree_vals_instr, consts_vlen, after_vlen_consts_init, depth, simulate_only=True, simulated_slot_counts=simulated_counts_mask)
-                        if mask_res_instr_idx < first_idx + 1:
+                        if mask_res_instr_idx < first_idx + 2:
                             first_idx = mask_res_instr_idx
                             routing_decision = LoadRouting.MASKED_LOAD
 
