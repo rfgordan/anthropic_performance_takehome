@@ -396,7 +396,7 @@ class KernelBuilder:
 
         return res
     
-    def build_apply_node_val_mem(self, body, i, inp_indices : ScratchObjectWrapper, inp_values : ScratchObjectWrapper, node_vals : ScratchObjectWrapper, round, st, debug_info, simulate_only=False, simulated_slot_counts=None):
+    def build_apply_node_val_mem(self, body, i, inp_indices : ScratchObjectWrapper, inp_values : ScratchObjectWrapper, node_vals : ScratchObjectWrapper, last_hash_xor_vlen, after_hash_consts_idx, round, st, debug_info, did_skip_final_xor=False, simulate_only=False, simulated_slot_counts=None):
         
         # print("Mem Simulate: ", simulate_only, "simulate slot counts:", simulated_slot_counts)
 
@@ -427,6 +427,12 @@ class KernelBuilder:
             res = self.interleave_engine_fns(body, ("alu", slots), max(inp_values.get_next_read_write(j), node_vals.get_next_read(j)), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
             inp_values.update_last_read_write(res - 1, j)
             node_vals.update_last_read(res - 1, j)
+
+        if did_skip_final_xor:
+            for j in range(i,i+VLEN):
+                slot = ("^", inp_values.addr() + j, inp_values.addr() + j, last_hash_xor_vlen)
+                res = self.interleave_engine_fns(body, ("alu", slot), max(inp_values.get_next_read_write(j), after_hash_consts_idx), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+                inp_values.update_last_read_write(res - 1, j)
 
         # # broadcast forest location in mem
         # for i in range(0, end - st, VLEN):
@@ -911,11 +917,7 @@ class KernelBuilder:
                     did_skip_final_xor = depth < n_tree_preload_layers + n_jump_layers_enabled and round > 0
 
                     simulated_counts_mem = defaultdict(lambda: defaultdict(int))
-                    mem_res_instr_idx = self.build_apply_node_val_mem(body, i, inp_indices.dcopy(), inp_values.dcopy(), node_vals.dcopy(), round, st, debug_info, simulate_only=True, simulated_slot_counts=simulated_counts_mem)
-                    if did_skip_final_xor:
-                        slot = ("^", inp_values.addr() + i, inp_values.addr() + i, hash_consts_vlen[-1][0])
-                        mem_res_instr_idx = self.interleave_engine_fns(body, ("valu", slot), max(mem_res_instr_idx, after_hash_consts_idx[-1][0]), simulate_only=True, simulated_slot_counts=simulated_counts_mem)
-
+                    mem_res_instr_idx = self.build_apply_node_val_mem(body, i, inp_indices.dcopy(), inp_values.dcopy(), node_vals.dcopy(), hash_consts_vlen[-1][0], after_hash_consts_idx[-1][0], round, st, debug_info, did_skip_final_xor=did_skip_final_xor, simulate_only=True, simulated_slot_counts=simulated_counts_mem)
                     first_idx = mem_res_instr_idx
                     routing_decision = LoadRouting.FROM_MEM_LOAD
 
@@ -932,7 +934,7 @@ class KernelBuilder:
                         #     slot = ("^", inp_values + i, inp_values + i, hash_consts_vlen[-1][0])
                         #     jump_res_instr_idx = self.interleave_engine_fns(body, ("valu", slot), max(jump_res_instr_idx, after_hash_consts_idx[-1][0]), simulate_only=True, simulated_slot_counts=simulated_counts_jump)
                         
-                        if jump_res_instr_idx < first_idx:
+                        if jump_res_instr_idx < first_idx + 1:
                             first_idx = jump_res_instr_idx
                             routing_decision = LoadRouting.JUMP_LOAD_2X
 
@@ -941,26 +943,26 @@ class KernelBuilder:
                     if can_apply_node_val_masked:
                         simulated_counts_mask = defaultdict(lambda: defaultdict(int))
                         mask_res_instr_idx = self.build_apply_node_val_masked(body, i, inp_values.dcopy(), inp_indices.dcopy(), node_vals.dcopy(), tmp1_parallel.dcopy(), tree_vals_vlen, forest_consts_vlen, after_load_tree_vals_instr, consts_vlen, after_vlen_consts_init, depth, simulate_only=True, simulated_slot_counts=simulated_counts_mask)
-                        if mask_res_instr_idx < first_idx + 2:
+                        if mask_res_instr_idx < first_idx + 3:
                             first_idx = mask_res_instr_idx
                             routing_decision = LoadRouting.MASKED_LOAD
 
                     match routing_decision:
                         case LoadRouting.FROM_MEM_LOAD:
-                            self.build_apply_node_val_mem(body, i, inp_indices, inp_values, node_vals, round, st, debug_info, simulate_only=False)
+                            self.build_apply_node_val_mem(body, i, inp_indices, inp_values, node_vals, hash_consts_vlen[-1][0], after_hash_consts_idx[-1][0], round, st, debug_info, did_skip_final_xor=did_skip_final_xor)
                         case LoadRouting.JUMP_LOAD_2X:
                             self.build_double_scratch_jump_load(body, i, tmp_jump1, tmp_jump2, jump_load_pointer, jump_load_pointer_alt, post_jump_load_offset, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, jump_layer_lens, jump_layer_lens_sq, consts[0], round, depth, st, n_tree_preload_layers, debug_info)
                         case LoadRouting.MASKED_LOAD:
-                            self.build_apply_node_val_masked(body, i, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, forest_consts_vlen, after_load_tree_vals_instr, consts_vlen, after_vlen_consts_init, depth, simulate_only=False)
+                            self.build_apply_node_val_masked(body, i, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, forest_consts_vlen, after_load_tree_vals_instr, consts_vlen, after_vlen_consts_init, depth)
                         case _:
                             raise NotImplementedError("WTF impossible routing decision")
                         
                     # need to apply XOR as expected
-                    if did_skip_final_xor and routing_decision not in (LoadRouting.MASKED_LOAD, LoadRouting.JUMP_LOAD_2X):
-                        for j in range(i,i+VLEN):
-                            slot = ("^", inp_values.addr() + j, inp_values.addr() + j, hash_consts_vlen[-1][0])
-                            res = self.interleave_engine_fns(body, ("alu", slot), max(inp_values.get_next_read_write(j), after_hash_consts_idx[-1][0]))
-                            inp_values.update_last_read_write(res - 1, j)
+                    # if did_skip_final_xor and routing_decision not in (LoadRouting.MASKED_LOAD, LoadRouting.JUMP_LOAD_2X):
+                    #     for j in range(i,i+VLEN):
+                    #         slot = ("^", inp_values.addr() + j, inp_values.addr() + j, hash_consts_vlen[-1][0])
+                    #         res = self.interleave_engine_fns(body, ("alu", slot), max(inp_values.get_next_read_write(j), after_hash_consts_idx[-1][0]))
+                    #         inp_values.update_last_read_write(res - 1, j)
 
                     # print("routing vector load to jump: ", b, " jump res idx: ", jump_res_instr_idx, " mem_res_instr_idx: ", mem_res_instr_idx)
 
