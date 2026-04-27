@@ -235,7 +235,23 @@ class KernelBuilder:
         scratch_inp_idx.update_last_write(res - 1, i, by_vlen=True)
 
         return res
-    
+
+    def build_idx_one(self, body, i, scratch_inp_idx : ScratchObjectWrapper, scratch_inp_val : ScratchObjectWrapper, tmp1_parallel : ScratchObjectWrapper, forest_const_p1_vlen, two_const_vlen, after_first_vlen_consts_init):
+
+        # tmp1 = val % 2
+        slots = ("%", tmp1_parallel.addr() + i, scratch_inp_val.addr() + i, two_const_vlen)
+        res = self.interleave_engine_fns(body, ("valu", slots), max(tmp1_parallel.get_next_write(i, by_vlen=True), scratch_inp_val.get_next_read(i, by_vlen=True), after_first_vlen_consts_init))
+        tmp1_parallel.update_last_write(res - 1, i, by_vlen=True)
+        scratch_inp_val.update_last_read(res - 1, i, by_vlen=True)
+
+        # idx = tmp1 + 1
+        slots = ("+", scratch_inp_idx.addr() + i, tmp1_parallel.addr() + i, forest_const_p1_vlen)
+        res = self.interleave_engine_fns(body, ("valu", slots), max(scratch_inp_idx.get_next_write(i, by_vlen=True), tmp1_parallel.get_next_read(i, by_vlen=True), after_first_vlen_consts_init))
+        scratch_inp_idx.update_last_write(res - 1, i, by_vlen=True)
+        tmp1_parallel.update_last_read(res - 1, i, by_vlen=True)
+
+        return res    
+
     def build_idx_next(self, body, i, scratch_inp_idx : ScratchObjectWrapper, scratch_inp_val : ScratchObjectWrapper, tmp1_parallel : ScratchObjectWrapper, forest_const_m1_vlen, after_forest_m1_vlen_instr, two_const_vlen, after_first_vlen_consts_init):
 
         # tmp1 = val % 2
@@ -899,8 +915,9 @@ class KernelBuilder:
 
                 # check input indices / values indexed in full batch
                 for j in range(i,i+VLEN):
-                    self.interleave_engine_fns(body, ("debug", ("compare", inp_indices.addr() + j, (round, st + j, "idx"))), inp_indices.get_next_read(j))
                     self.interleave_engine_fns(body, ("debug", ("compare", inp_values.addr() + j, (round, st + j, "val"))), inp_values.get_next_read(j))
+                    if depth > 0:
+                        self.interleave_engine_fns(body, ("debug", ("compare", inp_indices.addr() + j, (round, st + j, "idx"))), inp_indices.get_next_read(j))
 
                 if depth == 0:
                     tree_val_zero_vlen = tree_val_zero_base_vlen if round == 0 else tree_vals_vlen[0]
@@ -984,7 +1001,10 @@ class KernelBuilder:
 
                 # if at full depth, set idx to 0
                 if (round + 1) % (forest_height + 1) == 0:
-                    res = self.build_idx_wrap(body, i, inp_indices, end - st, forest_consts_vlen[0])
+                    # res = self.build_idx_wrap(body, i, inp_indices, end - st, forest_consts_vlen[0])
+                    return
+                elif (round + 1) % (forest_height + 1) == 1:
+                    res = self.build_idx_one(body, i, inp_indices, inp_values, tmp1_parallel, forest_consts_vlen[1], consts_vlen[2], after_first_vlen_consts_init)
                 # idx = 2*idx + (1 if val % 2 == 0 else 2)
                 else:
                     res = self.build_idx_next(body, i, inp_indices, inp_values, tmp1_parallel, forest_const_m1_vlen, after_forest_m1_vlen_instr, consts_vlen[2], after_first_vlen_consts_init)
