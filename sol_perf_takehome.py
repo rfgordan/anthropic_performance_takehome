@@ -1003,6 +1003,7 @@ class KernelBuilder:
                 if (round + 1) % (forest_height + 1) == 0:
                     # res = self.build_idx_wrap(body, i, inp_indices, end - st, forest_consts_vlen[0])
                     return
+                # if at depth 1, special formula
                 elif (round + 1) % (forest_height + 1) == 1:
                     res = self.build_idx_one(body, i, inp_indices, inp_values, tmp1_parallel, forest_consts_vlen[1], consts_vlen[2], after_first_vlen_consts_init)
                 # idx = 2*idx + (1 if val % 2 == 0 else 2)
