@@ -387,7 +387,7 @@ class Machine:
                             f"{res} != {ref} for {keys} at pc={core.pc} loc={loc}"
                         )
                 continue
-            assert len(slots) <= SLOT_LIMITS[name]
+            assert len(slots) <= SLOT_LIMITS[name], f"slot limit violated for engine: {name}"
             for i, slot in enumerate(slots):
                 extra_info = {}
                 if isinstance(slot[-1], dict):
