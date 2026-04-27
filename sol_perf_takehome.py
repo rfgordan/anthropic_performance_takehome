@@ -417,8 +417,11 @@ class KernelBuilder:
         #     self.interleave_engine_fns(body, ("debug", ("compare", node_vals + j, (round, st + j, "node_val"))), loads[j-i], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
 
         # perform XOR with node values in parallel
-        # slots = ("^", inp_values + i, inp_values + i, node_vals + i)
-        # res_instr_idx = self.interleave_engine_fns(body, ("valu", slots), max(loads), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+        # slots = ("^", inp_values.addr() + i, inp_values.addr() + i, node_vals.addr() + i)
+        # res = self.interleave_engine_fns(body, ("valu", slots), max(inp_values.get_next_read_write(i, by_vlen=True), node_vals.get_next_read(i, by_vlen=True)), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+        # inp_values.update_last_read_write(res - 1, i, by_vlen=True)
+        # node_vals.update_last_read(res - 1, i, by_vlen=True)
+
         for j in range(i,i+VLEN):
             slots = ("^", inp_values.addr() + j, inp_values.addr() + j, node_vals.addr() + j)
             res = self.interleave_engine_fns(body, ("alu", slots), max(inp_values.get_next_read_write(j), node_vals.get_next_read(j)), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
@@ -954,9 +957,10 @@ class KernelBuilder:
                         
                     # need to apply XOR as expected
                     if did_skip_final_xor and routing_decision not in (LoadRouting.MASKED_LOAD, LoadRouting.JUMP_LOAD_2X):
-                        slot = ("^", inp_values.addr() + i, inp_values.addr() + i, hash_consts_vlen[-1][0])
-                        res = self.interleave_engine_fns(body, ("valu", slot), max(inp_values.get_next_read_write(i, by_vlen=True), after_hash_consts_idx[-1][0]))
-                        inp_values.update_last_read_write(res - 1, i, by_vlen=True)
+                        for j in range(i,i+VLEN):
+                            slot = ("^", inp_values.addr() + j, inp_values.addr() + j, hash_consts_vlen[-1][0])
+                            res = self.interleave_engine_fns(body, ("alu", slot), max(inp_values.get_next_read_write(j), after_hash_consts_idx[-1][0]))
+                            inp_values.update_last_read_write(res - 1, j)
 
                     # print("routing vector load to jump: ", b, " jump res idx: ", jump_res_instr_idx, " mem_res_instr_idx: ", mem_res_instr_idx)
 
