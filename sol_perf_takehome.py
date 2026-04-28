@@ -903,9 +903,9 @@ class KernelBuilder:
                         slots = ("+", inp_val_offsets + i // VLEN, inp_val_offsets + i // VLEN, chunk_incr)
                         after_init_offsets_instrs[i // VLEN] = self.interleave_engine_fns(body, ("alu", slots), max(after_init_offsets_instrs[i // VLEN]))
 
-                    slots = ("vbroadcast", inp_indices.addr() + i, forest_consts_vlen[0])
-                    res = self.interleave_engine_fns(body, ("valu", slots), max(inp_indices.get_next_write(i, by_vlen=True), after_forest_vlen_instr))
-                    inp_indices.update_last_write(res - 1, i, by_vlen=True)
+                    # slots = ("vbroadcast", inp_indices.addr() + i, forest_consts_vlen[0])
+                    # res = self.interleave_engine_fns(body, ("valu", slots), max(inp_indices.get_next_write(i, by_vlen=True), after_forest_vlen_instr))
+                    # inp_indices.update_last_write(res - 1, i, by_vlen=True)
 
                     slots = ("vload", inp_values.addr() + i, inp_val_offsets + i // VLEN)
                     res = self.interleave_engine_fns(body, ("load", slots), max(inp_values.get_next_write(i, by_vlen=True), after_init_offsets_instrs[i // VLEN]))
