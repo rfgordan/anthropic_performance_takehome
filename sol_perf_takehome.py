@@ -331,13 +331,12 @@ class KernelBuilder:
             inp_indices.update_last_read(res - 1, j1)
 
             # first_jump_load_pointer = jump_load_pointer
-            if post_jump_load_offset.get_next_read_write() < jump_load_pointer.get_next_read_write():
-                tmp = jump_load_pointer
-                jump_load_pointer = post_jump_load_offset
-                post_jump_load_offset = tmp
-            # else:
-            #     first_jump_load_pointer = jump_load_pointer
-            #     next_jump_load_pointer = post_jump_load_offset
+            if jump_load_pointer_alt.get_next_read_write() < jump_load_pointer.get_next_read_write():
+                first_jump_load_pointer = jump_load_pointer_alt
+                next_jump_load_pointer = jump_load_pointer
+            else:
+                first_jump_load_pointer = jump_load_pointer
+                next_jump_load_pointer = jump_load_pointer_alt
 
             # tmp1 += ind2
             slot = ("+", tmp_jump1.addr(), tmp_jump1.addr(), inp_indices.addr() + j2)
@@ -346,9 +345,9 @@ class KernelBuilder:
             inp_indices.update_last_read(res - 1, j2)
 
             # jump_pointer += tmp1
-            slot = ("+", jump_load_pointer.addr(), jump_load_pointer.addr(), tmp_jump1.addr())
-            res = self.interleave_engine_fns(body, ("alu", slot), max(jump_load_pointer.get_next_read_write(), tmp_jump1.get_next_read()), debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
-            jump_load_pointer.update_last_read_write(res - 1)
+            slot = ("+", first_jump_load_pointer.addr(), first_jump_load_pointer.addr(), tmp_jump1.addr())
+            res = self.interleave_engine_fns(body, ("alu", slot), max(first_jump_load_pointer.get_next_read_write(), tmp_jump1.get_next_read()), debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+            first_jump_load_pointer.update_last_read_write(res - 1)
             tmp_jump1.update_last_read(res - 1)
 
             # set post jump pointer to next_offset ** 2
@@ -356,10 +355,10 @@ class KernelBuilder:
             res = self.interleave_engine_fns(body, ("alu", slot), post_jump_load_offset.get_next_read_write(), debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
             post_jump_load_offset.update_last_read_write(res - 1)
 
-            # # update alternative jump load pointer directly
-            # slot = ("+", next_jump_load_pointer.addr(), next_jump_load_pointer.addr(), jump_layer_offsets_sq + depth - n_tree_preload_layers + 1)
-            # res = self.interleave_engine_fns(body, ("alu", slot), next_jump_load_pointer.get_next_read_write(), debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
-            # next_jump_load_pointer.update_last_read_write(res - 1)
+            # update alternative jump load pointer directly
+            slot = ("+", next_jump_load_pointer.addr(), next_jump_load_pointer.addr(), jump_layer_offsets_sq + depth - n_tree_preload_layers + 1)
+            res = self.interleave_engine_fns(body, ("alu", slot), next_jump_load_pointer.get_next_read_write(), debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+            next_jump_load_pointer.update_last_read_write(res - 1)
 
             jump_load_data={
                 "dest1" : node_vals.addr() + j1,
@@ -374,10 +373,10 @@ class KernelBuilder:
 
             # jump indirect will trigger reserving the next slot for a flow op
             # can be synchronous with after_zero_node_val since its the jump-back instruction that loads to it
-            slot = ("jump_indirect", jump_load_pointer.addr())
-            res = self.interleave_engine_fns(body, ("flow", slot), max(jump_load_pointer.get_next_read_write(), post_jump_load_offset.get_next_read()), debug_info, jump_load_data=jump_load_data, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
-            jump_load_pointer.update_last_read_write(res - 2)
-            post_jump_load_offset.update_last_read(res - 2)
+            slot = ("jump_indirect", first_jump_load_pointer.addr())
+            res = self.interleave_engine_fns(body, ("flow", slot), max(first_jump_load_pointer.get_next_read_write(), post_jump_load_offset.get_next_read()), debug_info, jump_load_data=jump_load_data, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+            first_jump_load_pointer.update_last_read_write(res - 1)
+            post_jump_load_offset.update_last_read(res - 1)
             node_vals.update_last_write(res - 1, j1)
             node_vals.update_last_write(res - 1, j2)
 
