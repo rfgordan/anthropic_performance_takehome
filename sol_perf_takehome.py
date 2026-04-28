@@ -338,17 +338,17 @@ class KernelBuilder:
                 first_jump_load_pointer = jump_load_pointer
                 next_jump_load_pointer = jump_load_pointer_alt
 
+            # tmp1 += ind2
+            slot = ("+", tmp_jump1.addr(), tmp_jump1.addr(), inp_indices.addr() + j2)
+            res = self.interleave_engine_fns(body, ("alu", slot), max(tmp_jump1.get_next_read_write(), inp_indices.get_next_read(j2)), debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+            tmp_jump1.update_last_read_write(res - 1)
+            inp_indices.update_last_read(res - 1, j2)
+
             # jump_pointer += tmp1
             slot = ("+", first_jump_load_pointer.addr(), first_jump_load_pointer.addr(), tmp_jump1.addr())
             res = self.interleave_engine_fns(body, ("alu", slot), max(first_jump_load_pointer.get_next_read_write(), tmp_jump1.get_next_read()), debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
             first_jump_load_pointer.update_last_read_write(res - 1)
             tmp_jump1.update_last_read(res - 1)
-
-            # jump_pointer += ind2
-            slot = ("+", first_jump_load_pointer.addr(), first_jump_load_pointer.addr(), inp_indices.addr() + j2)
-            res = self.interleave_engine_fns(body, ("alu", slot), max(first_jump_load_pointer.get_next_read_write(), inp_indices.get_next_read(j2)), debug_info, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
-            first_jump_load_pointer.update_last_read_write(res - 1)
-            inp_indices.update_last_read(res - 1, j2)
 
             # set post jump pointer to next_offset ** 2
             slot = ("+", post_jump_load_offset.addr(), post_jump_load_offset.addr(), jump_layer_offsets_sq + depth - n_tree_preload_layers + 1)
