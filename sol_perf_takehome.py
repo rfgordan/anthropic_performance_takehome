@@ -999,15 +999,6 @@ class KernelBuilder:
                         case _:
                             raise NotImplementedError("WTF impossible routing decision")
                         
-                    # need to apply XOR as expected
-                    # if did_skip_final_xor and routing_decision not in (LoadRouting.MASKED_LOAD, LoadRouting.JUMP_LOAD_2X):
-                    #     for j in range(i,i+VLEN):
-                    #         slot = ("^", inp_values.addr() + j, inp_values.addr() + j, hash_consts_vlen[-1][0])
-                    #         res = self.interleave_engine_fns(body, ("alu", slot), max(inp_values.get_next_read_write(j), after_hash_consts_idx[-1][0]))
-                    #         inp_values.update_last_read_write(res - 1, j)
-
-                    # print("routing vector load to jump: ", b, " jump res idx: ", jump_res_instr_idx, " mem_res_instr_idx: ", mem_res_instr_idx)
-
                 should_skip_final_xor = (round + 1) % (forest_height + 1) < n_tree_preload_layers + n_jump_layers_enabled
                 res = self.build_hash_opt(body, i, inp_values, tmp1_parallel, hash_consts_vlen, round, st, end, debug_info, should_skip_final_xor)
                 # print("hash res: ", res)
@@ -1033,7 +1024,7 @@ class KernelBuilder:
                     res = self.build_idx_one(body, i, inp_indices, inp_values, tmp1_parallel, forest_consts_vlen[1], consts_vlen[2], after_first_vlen_consts_init)
                 # idx = 2*idx + (1 if val % 2 == 0 else 2)
                 else:
-                    if (i // 8) % 7 == 6:
+                    if (i // 8) % 7 >= 5:
                         res = self.build_idx_next_alu(body, i, inp_indices, inp_values, tmp1_parallel, forest_const_m1_vlen, after_forest_m1_vlen_instr, consts_vlen[2], after_first_vlen_consts_init)
                     else:
                         res = self.build_idx_next_valu(body, i, inp_indices, inp_values, tmp1_parallel, forest_const_m1_vlen, after_forest_m1_vlen_instr, consts_vlen[2], after_first_vlen_consts_init)
