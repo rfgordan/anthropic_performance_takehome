@@ -252,7 +252,7 @@ class KernelBuilder:
 
         return res    
 
-    def build_idx_next(self, body, i, scratch_inp_idx : ScratchObjectWrapper, scratch_inp_val : ScratchObjectWrapper, tmp1_parallel : ScratchObjectWrapper, forest_const_m1_vlen, after_forest_m1_vlen_instr, two_const_vlen, after_first_vlen_consts_init):
+    def build_idx_next_valu(self, body, i, scratch_inp_idx : ScratchObjectWrapper, scratch_inp_val : ScratchObjectWrapper, tmp1_parallel : ScratchObjectWrapper, forest_const_m1_vlen, after_forest_m1_vlen_instr, two_const_vlen, after_first_vlen_consts_init):
 
         # tmp1 = val % 2
         slots = ("%", tmp1_parallel.addr() + i, scratch_inp_val.addr() + i, two_const_vlen)
@@ -270,6 +270,34 @@ class KernelBuilder:
         slots = ("-", scratch_inp_idx.addr() + i, scratch_inp_idx.addr() + i, forest_const_m1_vlen)
         res = self.interleave_engine_fns(body, ("valu", slots), max(scratch_inp_idx.get_next_read_write(i, by_vlen=True), after_forest_m1_vlen_instr))
         scratch_inp_idx.update_last_read_write(res - 1, i, by_vlen=True)
+
+        return res
+    
+    def build_idx_next_alu(self, body, i, scratch_inp_idx : ScratchObjectWrapper, scratch_inp_val : ScratchObjectWrapper, tmp1_parallel : ScratchObjectWrapper, forest_const_m1_vlen, after_forest_m1_vlen_instr, two_const_vlen, after_first_vlen_consts_init):
+
+        for j in range(i,i+VLEN):
+
+            # tmp1 = val % 2
+            slot = ("%", tmp1_parallel.addr() + j, scratch_inp_val.addr() + j, two_const_vlen)
+            res = self.interleave_engine_fns(body, ("alu", slot), max(tmp1_parallel.get_next_write(j), scratch_inp_val.get_next_read(j), after_first_vlen_consts_init))
+            tmp1_parallel.update_last_write(res - 1, j)
+            scratch_inp_val.update_last_read(res - 1, j)
+
+            # idx = (idx * 2)
+            slot = ("*", scratch_inp_idx.addr() + j, scratch_inp_idx.addr() + j, two_const_vlen)
+            res = self.interleave_engine_fns(body, ("alu", slot), max(scratch_inp_idx.get_next_read_write(j), after_first_vlen_consts_init))
+            scratch_inp_idx.update_last_read_write(res - 1, j)
+
+            # idx = idx + tmp1
+            slot = ("+", scratch_inp_idx.addr() + j, scratch_inp_idx.addr() + j, tmp1_parallel.addr() + j)
+            res = self.interleave_engine_fns(body, ("alu", slot), max(scratch_inp_idx.get_next_read_write(j), tmp1_parallel.get_next_read(j)))
+            scratch_inp_idx.update_last_read_write(res - 1, j)
+            tmp1_parallel.update_last_read(res - 1, j)
+
+            # idx = idx - (forest_values_p - 1)
+            slot = ("-", scratch_inp_idx.addr() + j, scratch_inp_idx.addr() + j, forest_const_m1_vlen)
+            res = self.interleave_engine_fns(body, ("alu", slot), max(scratch_inp_idx.get_next_read_write(j), after_forest_m1_vlen_instr))
+            scratch_inp_idx.update_last_read_write(res - 1, j)
 
         return res
     
@@ -618,7 +646,7 @@ class KernelBuilder:
                         jump2_instr_mod["flow"] = [("jump", i + 1 - num_prev_jump_expands)]
                         jump_instrs.append(jump2_instr_mod)
 
-                print(f"Assembled new jump load with len:{len(jump_instrs)}, depth:{jump_data["depth"]}, st:{jump_data["st"]}, end:{jump_data["end"]}")
+                # print(f"Assembled new jump load with len:{len(jump_instrs)}, depth:{jump_data["depth"]}, st:{jump_data["st"]}, end:{jump_data["end"]}")
                 jump_block_instrs.extend(jump_instrs)
                 num_prev_jump_expands += 1
 
@@ -629,8 +657,7 @@ class KernelBuilder:
         
         # print("Full jumpy block instrs: ", jump_block_instrs)
         main_instr_len = len(body)
-        print("Instruction length without jump block:", main_instr_len)
-        print("Jump block len:", len(jump_block_instrs))
+        print(f"Instruction length without jump block:{main_instr_len}, Number of jumps: {num_prev_jump_expands}, Jump block len: {len(jump_block_instrs)}")
         body.extend(jump_block_instrs)
         return main_instr_len
 
@@ -1006,7 +1033,10 @@ class KernelBuilder:
                     res = self.build_idx_one(body, i, inp_indices, inp_values, tmp1_parallel, forest_consts_vlen[1], consts_vlen[2], after_first_vlen_consts_init)
                 # idx = 2*idx + (1 if val % 2 == 0 else 2)
                 else:
-                    res = self.build_idx_next(body, i, inp_indices, inp_values, tmp1_parallel, forest_const_m1_vlen, after_forest_m1_vlen_instr, consts_vlen[2], after_first_vlen_consts_init)
+                    if (i // 8) % 7 == 6:
+                        res = self.build_idx_next_alu(body, i, inp_indices, inp_values, tmp1_parallel, forest_const_m1_vlen, after_forest_m1_vlen_instr, consts_vlen[2], after_first_vlen_consts_init)
+                    else:
+                        res = self.build_idx_next_valu(body, i, inp_indices, inp_values, tmp1_parallel, forest_const_m1_vlen, after_forest_m1_vlen_instr, consts_vlen[2], after_first_vlen_consts_init)
                     # print("wrap res: ", res)
 
                 for j in range(i,i+VLEN):
