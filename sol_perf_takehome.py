@@ -903,21 +903,21 @@ class KernelBuilder:
 
             assert chunk_len % VLEN == 0, "If chunk length isn't a multiple of VLEN, vload could overrun inp_values"
 
-            # use jump load for one every 8 vectors
-            # total_routed_count = 0
-            # jump_loaded_count = 0
-            # jump_load_every_n = 11
-            # def route_vector_load(jump_res_instr_idx, mem_res_instr_idx, i, round, depth, n_tree_preload_layers, n_jump_layers_enabled):
-            #     routing = LoadRouting.FROM_MEM_LOAD
+            # use jump load for one every 3 vectors
+            total_routed_count = 0
+            jump_loaded_count = 0
+            jump_load_every_n = 6
+            def route_vector_load(i, round, depth, n_tree_preload_layers, n_jump_layers_enabled):
+                # routing = LoadRouting.FROM_MEM_LOAD
                 
-            #     nonlocal total_routed_count, jump_loaded_count
-            #     can_jump_load = n_tree_preload_layers <= depth < n_jump_layers_enabled
-            #     # should_jump_load = can_jump_load and jump_loaded_count < total_routed_count // jump_load_every_n
-            #     should_jump_load = can_jump_load and jump_res_instr_idx < mem_res_instr_idx
-            #     total_routed_count += 1
-            #     jump_loaded_count += int(should_jump_load)
-            #     # print("Routing total count: ", total_routed_count, " jump loaded count: ", jump_loaded_count, " decision:", should_jump_load)
-            #     return should_jump_load
+                nonlocal total_routed_count, jump_loaded_count
+                can_jump_load = n_tree_preload_layers <= depth < n_jump_layers_enabled
+                should_jump_load = can_jump_load and jump_loaded_count < total_routed_count // jump_load_every_n
+                # should_jump_load = can_jump_load and jump_res_instr_idx < mem_res_instr_idx
+                total_routed_count += 1
+                jump_loaded_count += int(should_jump_load)
+                # print("Routing total count: ", total_routed_count, " jump loaded count: ", jump_loaded_count, " decision:", should_jump_load)
+                return should_jump_load
             
             def process_vector(round, i):
                 debug_info = {"round": round, "st": st, "i": i}
@@ -945,7 +945,8 @@ class KernelBuilder:
                     res = self.build_apply_node_val_root(body, i, inp_values, tree_val_zero_vlen)
                 elif depth < n_tree_preload_layers:
                     self.build_apply_node_val_masked(body, i, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, forest_consts_vlen, after_load_tree_vals_instr, consts_vlen, after_vlen_consts_init, depth)
-                elif n_tree_preload_layers <= depth < n_tree_preload_layers + n_jump_layers_enabled and (i // VLEN) % 2 ==:
+                elif n_tree_preload_layers <= depth < n_tree_preload_layers + n_jump_layers_enabled and route_vector_load(i, round, depth, n_tree_preload_layers, n_jump_layers_enabled):
+                    self.build_double_scratch_jump_load(body, i, tmp_jump1, jump_load_pointer, jump_load_pointer_alt, post_jump_load_offset, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, jump_layer_offsets_sq, consts[0], round, depth, st, n_tree_preload_layers, debug_info)
                 else:
                     can_apply_node_val_masked = depth < n_tree_preload_layers
                     did_skip_final_xor = depth < n_tree_preload_layers + n_jump_layers_enabled and round > 0
