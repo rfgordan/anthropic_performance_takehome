@@ -163,8 +163,9 @@ class KernelBuilder:
 
             elif hi == 3:
                 slots = ("^", val_hash_addrs.addr() + i, tmp1_parallel.addr() + i, val_hash_addrs.addr() + i)
-                res = self.interleave_engine_fns(body, ("valu", slots), max(val_hash_addrs.get_next_read_write(i, by_vlen=True), tmp1_parallel.get_next_read(i, by_vlen=True)), debug_info)
-                val_hash_addrs.update_last_read_write(res - 1, i, by_vlen=True)
+                res = self.interleave_valu_opt(body, slots, i, [tmp1_parallel, val_hash_addrs], [val_hash_addrs])
+                # res = self.interleave_engine_fns(body, ("valu", slots), max(val_hash_addrs.get_next_read_write(i, by_vlen=True), tmp1_parallel.get_next_read(i, by_vlen=True)), debug_info)
+                # val_hash_addrs.update_last_read_write(res - 1, i, by_vlen=True)
 
             # merged multiply_add
             elif op3 == "<<" and op2 == "+" and op1 == "+":
