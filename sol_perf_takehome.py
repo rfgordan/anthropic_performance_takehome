@@ -320,9 +320,10 @@ class KernelBuilder:
     
     def build_apply_node_val_root(self, body, i, inp_values : ScratchObjectWrapper, root_node_val_vlen):
         slots = ("^", inp_values.addr() + i, inp_values.addr() + i, root_node_val_vlen)
-        res = self.interleave_engine_fns(body, ("valu", slots), inp_values.get_next_read_write(i, by_vlen=True))
-        inp_values.update_last_read_write(res - 1, i, by_vlen=True)
-        return res
+        # res = self.interleave_engine_fns(body, ("valu", slots), inp_values.get_next_read_write(i, by_vlen=True))
+        # inp_values.update_last_read_write(res - 1, i, by_vlen=True)
+        # return res
+        return self.interleave_valu_opt(body, ("valu", slots), i, [inp_values, root_node_val_vlen], [inp_values])
 
 
     def build_apply_node_val_masked(self, body, i, inp_values : ScratchObjectWrapper, inp_indices : ScratchObjectWrapper, node_vals : ScratchObjectWrapper, tmp1_parallel : ScratchObjectWrapper, tree_vals_vlen, tree_idxs_vlen, after_load_tree_vals_instr, consts_vlen, after_vlen_consts_init, depth, simulate_only=False, simulated_slot_counts=None):
@@ -542,31 +543,33 @@ class KernelBuilder:
         return slot_count
 
     def interleave_valu_opt(self, body, slot, i, reads : list[ScratchObjectWrapper], writes : list[ScratchObjectWrapper], extra_info={}, simulate_only=False, simulate_slot_counts=None):
-        simulate_counts_valu = defaultdict(lambda: defaultdict(int)) if simulate_slot_counts is None else copy.deepcopy(simulate_slot_counts)
+        
         engine, (op, dst, a1, a2) = slot
 
         assert engine == "valu", "optimized valu interleaving only supports valu"
         assert op not in ("vbroadcast", "multiply_add"), "optimized valu interleaving requires valu op must have a corresponding valu"
 
         # sim valu path
+        simulate_counts_valu = defaultdict(lambda: defaultdict(int)) if simulate_slot_counts is None else copy.deepcopy(simulate_slot_counts)
         first_possible = max([r.get_next_read(i, by_vlen=True) for r in reads] + [w.get_next_write(i, by_vlen=True) for w in writes])
         next_instr_valu = self.interleave_engine_fns(body, slot, first_possible, extra_info, should_pack_valu=False, jump_load_data={}, simulate_only=True, simulated_slot_counts=simulate_counts_valu)
 
         # sim alu path
+        simulate_counts_alu = defaultdict(lambda: defaultdict(int)) if simulate_slot_counts is None else copy.deepcopy(simulate_slot_counts)
         max_next_instr_alu = 0
         for j in range(0,VLEN):
             slot = ("alu", (op, dst+j, a1+j, a2+j))
             first_possible = max([r.get_next_read(i+j) for r in reads] + [w.get_next_write(i+j) for w in writes])
-            next_instr_alu = self.interleave_engine_fns(body, slot, first_possible, extra_info, should_pack_valu=False, jump_load_data={}, simulate_only=True, simulated_slot_counts=simulate_slot_counts)
+            next_instr_alu = self.interleave_engine_fns(body, slot, first_possible, extra_info, should_pack_valu=False, jump_load_data={}, simulate_only=True, simulated_slot_counts=simulate_counts_alu)
             max_next_instr_alu = max(max_next_instr_alu, next_instr_alu)
 
         print(f"Comparing first alu {max_next_instr_alu} vs valu {next_instr_valu}")
         if next_instr_valu < max_next_instr_alu:
             next_instr = self.interleave_engine_fns(body, slot, first_possible, extra_info, should_pack_valu=False)
             for r in reads:
-                r.update_last_read(next_instr, i, by_vlen=True)
+                r.update_last_read(next_instr - 1, i, by_vlen=True)
             for w in writes:
-                w.update_last_write(next_instr, i, by_vlen=True)
+                w.update_last_write(next_instr - 1, i, by_vlen=True)
 
             return next_instr
         else:
@@ -575,9 +578,9 @@ class KernelBuilder:
                 first_possible = max([r.get_next_read(i+j) for r in reads] + [w.get_next_write(i+j) for w in writes])
                 next_instr_alu = self.interleave_engine_fns(body, slot, first_possible, extra_info, should_pack_valu=False)
                 for r in reads:
-                    r.update_last_read(next_instr_alu, i+j)
+                    r.update_last_read(next_instr_alu - 1, i+j)
                 for w in writes:
-                    w.update_last_write(next_instr_alu, i+j)
+                    w.update_last_write(next_instr_alu - 1, i+j)
 
             return max_next_instr_alu
 
