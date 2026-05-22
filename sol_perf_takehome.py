@@ -556,7 +556,7 @@ class KernelBuilder:
     def interleave_valu_opt(self, body, slot, i, reads : list[ScratchObjectWrapper], writes : list[ScratchObjectWrapper], extra_info={}, simulate_only=False, simulated_slot_counts=None):
         
         slot_limits = {
-            "alu": 8, # retain alu slots for load operations
+            "alu": 10, # retain alu slots for load operations
             "valu": 6,
             "load": 2,
             "store": 2,
