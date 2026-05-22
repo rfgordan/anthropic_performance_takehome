@@ -163,7 +163,7 @@ class KernelBuilder:
 
             elif hi == 3:
                 slots = ("^", val_hash_addrs.addr() + i, tmp1_parallel.addr() + i, val_hash_addrs.addr() + i)
-                res = self.interleave_valu_opt(body, slots, i, [tmp1_parallel, val_hash_addrs], [val_hash_addrs])
+                res = self.interleave_valu_opt(body, ("valu", slots), i, [tmp1_parallel, val_hash_addrs], [val_hash_addrs])
                 # res = self.interleave_engine_fns(body, ("valu", slots), max(val_hash_addrs.get_next_read_write(i, by_vlen=True), tmp1_parallel.get_next_read(i, by_vlen=True)), debug_info)
                 # val_hash_addrs.update_last_read_write(res - 1, i, by_vlen=True)
 
@@ -193,23 +193,26 @@ class KernelBuilder:
             else:
                 # op1
                 slots = (op1, tmp1_parallel.addr() + i, val_hash_addrs.addr() + i, val1_const_vlen)
-                res = self.interleave_engine_fns(body, ("valu", slots), max(tmp1_parallel.get_next_write(i, by_vlen=True), val_hash_addrs.get_next_read(i, by_vlen=True)), debug_info)
-                tmp1_parallel.update_last_write(res - 1, i, by_vlen=True)
-                val_hash_addrs.update_last_read(res - 1, i, by_vlen=True)
+                res = self.interleave_valu_opt(body, ("valu", slots), i, reads=[val_hash_addrs], writes=[tmp1_parallel])
+                # res = self.interleave_engine_fns(body, ("valu", slots), max(tmp1_parallel.get_next_write(i, by_vlen=True), val_hash_addrs.get_next_read(i, by_vlen=True)), debug_info)
+                # tmp1_parallel.update_last_write(res - 1, i, by_vlen=True)
+                # val_hash_addrs.update_last_read(res - 1, i, by_vlen=True)
 
                 # instrs.append(("debug", [("compare", tmp1_parallel + i, (round, st + i, "hash_stage1", hi)) for i in range(0, end - st)]))
 
                 # op3
                 slots = (op3, val_hash_addrs.addr() + i, val_hash_addrs.addr() + i, val3_const_vlen)
-                res = self.interleave_engine_fns(body, ("valu", slots), val_hash_addrs.get_next_read_write(i, by_vlen=True), debug_info)
-                val_hash_addrs.update_last_read_write(res - 1, i, by_vlen=True)
+                res = self.interleave_valu_opt(body, ("valu", slots), i, reads=[val_hash_addrs], writes=[val_hash_addrs])
+                # res = self.interleave_engine_fns(body, ("valu", slots), val_hash_addrs.get_next_read_write(i, by_vlen=True), debug_info)
+                # val_hash_addrs.update_last_read_write(res - 1, i, by_vlen=True)
 
                 # instrs.append(("debug", [("compare", tmp2_parallel + i, (round, st + i, "hash_stage2", hi)) for i in range(0, end - st)]))
 
                 # op2
                 slots = (op2, val_hash_addrs.addr() + i, tmp1_parallel.addr() + i, val_hash_addrs.addr() + i)
-                res = self.interleave_engine_fns(body, ("valu", slots), max(val_hash_addrs.get_next_read_write(i, by_vlen=True), tmp1_parallel.get_next_read(i, by_vlen=True)), debug_info)
-                val_hash_addrs.update_last_read_write(res - 1, i, by_vlen=True)
+                res = self.interleave_valu_opt(body, ("valu", slots), i, reads=[val_hash_addrs, tmp1_parallel], writes=[val_hash_addrs])
+                # res = self.interleave_engine_fns(body, ("valu", slots), max(val_hash_addrs.get_next_read_write(i, by_vlen=True), tmp1_parallel.get_next_read(i, by_vlen=True)), debug_info)
+                # val_hash_addrs.update_last_read_write(res - 1, i, by_vlen=True)
 
             if hi != 2:
                 for j in range(i,i+VLEN):
@@ -258,15 +261,17 @@ class KernelBuilder:
 
         # tmp1 = val % 2
         slots = ("%", tmp1_parallel.addr() + i, scratch_inp_val.addr() + i, two_const_vlen)
-        res = self.interleave_engine_fns(body, ("valu", slots), max(tmp1_parallel.get_next_write(i, by_vlen=True), scratch_inp_val.get_next_read(i, by_vlen=True), after_first_vlen_consts_init))
-        tmp1_parallel.update_last_write(res - 1, i, by_vlen=True)
-        scratch_inp_val.update_last_read(res - 1, i, by_vlen=True)
+        res = self.interleave_valu_opt(body, ("valu", slots), i, reads=[scratch_inp_val], writes=[tmp1_parallel])
+        # res = self.interleave_engine_fns(body, ("valu", slots), max(tmp1_parallel.get_next_write(i, by_vlen=True), scratch_inp_val.get_next_read(i, by_vlen=True), after_first_vlen_consts_init))
+        # tmp1_parallel.update_last_write(res - 1, i, by_vlen=True)
+        # scratch_inp_val.update_last_read(res - 1, i, by_vlen=True)
 
         # idx = tmp1 + 1
         slots = ("+", scratch_inp_idx.addr() + i, tmp1_parallel.addr() + i, forest_const_p1_vlen)
-        res = self.interleave_engine_fns(body, ("valu", slots), max(scratch_inp_idx.get_next_write(i, by_vlen=True), tmp1_parallel.get_next_read(i, by_vlen=True), after_first_vlen_consts_init))
-        scratch_inp_idx.update_last_write(res - 1, i, by_vlen=True)
-        tmp1_parallel.update_last_read(res - 1, i, by_vlen=True)
+        res = self.interleave_valu_opt(body, ("valu", slots), i, reads=[tmp1_parallel], writes=[scratch_inp_idx])
+        # res = self.interleave_engine_fns(body, ("valu", slots), max(scratch_inp_idx.get_next_write(i, by_vlen=True), tmp1_parallel.get_next_read(i, by_vlen=True), after_first_vlen_consts_init))
+        # scratch_inp_idx.update_last_write(res - 1, i, by_vlen=True)
+        # tmp1_parallel.update_last_read(res - 1, i, by_vlen=True)
 
         return res    
 
@@ -344,10 +349,10 @@ class KernelBuilder:
 
             # mask input indices vs constants
             slots = ("==", tmp1_parallel.addr() + i, inp_indices.addr() + i, tree_idxs_vlen[j])
-            # res = self.interleave_valu_opt(body, ("valu", slots), i, reads=[inp_indices], writes=[tmp1_parallel])
-            res = self.interleave_engine_fns(body, ("valu", slots), max(tmp1_parallel.get_next_write(i, by_vlen=True), inp_indices.get_next_read(i, by_vlen=True), after_load_tree_vals_instr), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
-            tmp1_parallel.update_last_write(res - 1, i, by_vlen=True)
-            inp_indices.update_last_read(res - 1, i, by_vlen=True)
+            res = self.interleave_valu_opt(body, ("valu", slots), i, reads=[inp_indices], writes=[tmp1_parallel])
+            # res = self.interleave_engine_fns(body, ("valu", slots), max(tmp1_parallel.get_next_write(i, by_vlen=True), inp_indices.get_next_read(i, by_vlen=True), after_load_tree_vals_instr), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+            # tmp1_parallel.update_last_write(res - 1, i, by_vlen=True)
+            # inp_indices.update_last_read(res - 1, i, by_vlen=True)
 
             # add node value if mask is true
             slots = ("multiply_add", node_vals.addr() + i, tmp1_parallel.addr() + i, tree_vals_vlen[j], base_load_vlen)
@@ -473,22 +478,25 @@ class KernelBuilder:
         #     self.interleave_engine_fns(body, ("debug", ("compare", node_vals + j, (round, st + j, "node_val"))), loads[j-i], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
 
         # perform XOR with node values in parallel
-        # slots = ("^", inp_values.addr() + i, inp_values.addr() + i, node_vals.addr() + i)
+        slots = ("^", inp_values.addr() + i, inp_values.addr() + i, node_vals.addr() + i)
+        res = self.interleave_valu_opt(body, ("valu", slots), i, reads=[inp_values, node_vals], writes=[inp_values], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
         # res = self.interleave_engine_fns(body, ("valu", slots), max(inp_values.get_next_read_write(i, by_vlen=True), node_vals.get_next_read(i, by_vlen=True)), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
         # inp_values.update_last_read_write(res - 1, i, by_vlen=True)
         # node_vals.update_last_read(res - 1, i, by_vlen=True)
 
-        for j in range(i,i+VLEN):
-            slots = ("^", inp_values.addr() + j, inp_values.addr() + j, node_vals.addr() + j)
-            res = self.interleave_engine_fns(body, ("alu", slots), max(inp_values.get_next_read_write(j), node_vals.get_next_read(j)), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
-            inp_values.update_last_read_write(res - 1, j)
-            node_vals.update_last_read(res - 1, j)
+        # for j in range(i,i+VLEN):
+        #     slots = ("^", inp_values.addr() + j, inp_values.addr() + j, node_vals.addr() + j)
+        #     res = self.interleave_engine_fns(body, ("alu", slots), max(inp_values.get_next_read_write(j), node_vals.get_next_read(j)), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+        #     inp_values.update_last_read_write(res - 1, j)
+        #     node_vals.update_last_read(res - 1, j)
 
         if did_skip_final_xor:
-            for j in range(i,i+VLEN):
-                slot = ("^", inp_values.addr() + j, inp_values.addr() + j, last_hash_xor_vlen)
-                res = self.interleave_engine_fns(body, ("alu", slot), max(inp_values.get_next_read_write(j), after_hash_consts_idx), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
-                inp_values.update_last_read_write(res - 1, j)
+            slot = ("^", inp_values.addr() + i, inp_values.addr() + i, last_hash_xor_vlen)
+            res = self.interleave_valu_opt(body, ("valu", slot), i, reads=[inp_values], writes=[inp_values], simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+            # for j in range(i,i+VLEN):
+            #     slot = ("^", inp_values.addr() + j, inp_values.addr() + j, last_hash_xor_vlen)
+            #     res = self.interleave_engine_fns(body, ("alu", slot), max(inp_values.get_next_read_write(j), after_hash_consts_idx), simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
+            #     inp_values.update_last_read_write(res - 1, j)
 
         # # broadcast forest location in mem
         # for i in range(0, end - st, VLEN):
@@ -545,8 +553,17 @@ class KernelBuilder:
 
         return slot_count
 
-    def interleave_valu_opt(self, body, slot, i, reads : list[ScratchObjectWrapper], writes : list[ScratchObjectWrapper], extra_info={}, simulate_only=False, simulate_slot_counts=None):
+    def interleave_valu_opt(self, body, slot, i, reads : list[ScratchObjectWrapper], writes : list[ScratchObjectWrapper], extra_info={}, simulate_only=False, simulated_slot_counts=None):
         
+        slot_limits = {
+            "alu": 8, # retain alu slots for load operations
+            "valu": 6,
+            "load": 2,
+            "store": 2,
+            "flow": 1,
+            "debug": 256,
+        }
+
         engine, (op, dst, a1, a2) = slot
 
         assert engine == "valu", "optimized valu interleaving only supports valu"
@@ -554,22 +571,22 @@ class KernelBuilder:
 
         print(f"Dependencies are: reads: {reads}, writes: {writes}")
         # sim valu path
-        simulate_counts_valu = defaultdict(lambda: defaultdict(int)) if simulate_slot_counts is None else copy.deepcopy(simulate_slot_counts)
+        simulate_counts_valu = defaultdict(lambda: defaultdict(int)) if simulated_slot_counts is None else copy.deepcopy(simulated_slot_counts)
         first_possible = max([r.get_next_read(i, by_vlen=True) for r in reads] + [w.get_next_write(i, by_vlen=True) for w in writes])
-        next_instr_valu = self.interleave_engine_fns(body, slot, first_possible, extra_info, should_pack_valu=False, jump_load_data={}, simulate_only=True, simulated_slot_counts=simulate_counts_valu)
+        next_instr_valu = self.interleave_engine_fns(body, slot, first_possible, extra_info, should_pack_valu=False, jump_load_data={}, simulate_only=True, simulated_slot_counts=simulate_counts_valu, slot_limits=slot_limits)
 
         # sim alu path
-        simulate_counts_alu = defaultdict(lambda: defaultdict(int)) if simulate_slot_counts is None else copy.deepcopy(simulate_slot_counts)
+        simulate_counts_alu = defaultdict(lambda: defaultdict(int)) if simulated_slot_counts is None else copy.deepcopy(simulated_slot_counts)
         max_next_instr_alu = 0
         for j in range(0,VLEN):
             alu_slot = ("alu", (op, dst+j, a1+j, a2+j))
             first_possible = max([r.get_next_read(i+j) for r in reads] + [w.get_next_write(i+j) for w in writes])
-            next_instr_alu = self.interleave_engine_fns(body, alu_slot, first_possible, extra_info, should_pack_valu=False, jump_load_data={}, simulate_only=True, simulated_slot_counts=simulate_counts_alu)
+            next_instr_alu = self.interleave_engine_fns(body, alu_slot, first_possible, extra_info, should_pack_valu=False, jump_load_data={}, simulate_only=True, simulated_slot_counts=simulate_counts_alu, slot_limits=slot_limits)
             max_next_instr_alu = max(max_next_instr_alu, next_instr_alu)
 
         print(f"Comparing first alu {max_next_instr_alu} vs valu {next_instr_valu}")
         if next_instr_valu < max_next_instr_alu:
-            next_instr = self.interleave_engine_fns(body, slot, first_possible, extra_info, should_pack_valu=False)
+            next_instr = self.interleave_engine_fns(body, slot, first_possible, extra_info, should_pack_valu=False, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
             for r in reads:
                 r.update_last_read(next_instr - 1, i, by_vlen=True)
             for w in writes:
@@ -580,7 +597,7 @@ class KernelBuilder:
             for j in range(0,VLEN):
                 alu_slot = ("alu", (op, dst+j, a1+j, a2+j))
                 first_possible = max([r.get_next_read(i+j) for r in reads] + [w.get_next_write(i+j) for w in writes])
-                next_instr_alu = self.interleave_engine_fns(body, alu_slot, first_possible, extra_info, should_pack_valu=False)
+                next_instr_alu = self.interleave_engine_fns(body, alu_slot, first_possible, extra_info, should_pack_valu=False, simulate_only=simulate_only, simulated_slot_counts=simulated_slot_counts)
                 for r in reads:
                     r.update_last_read(next_instr_alu - 1, i+j)
                 for w in writes:
@@ -589,7 +606,7 @@ class KernelBuilder:
             return max_next_instr_alu
 
 
-    def interleave_engine_fns(self, body, slot, first_possible=None, extra_info={}, should_pack_valu=True, jump_load_data={}, simulate_only=False, simulated_slot_counts=None):
+    def interleave_engine_fns(self, body, slot, first_possible=None, extra_info={}, should_pack_valu=True, jump_load_data={}, simulate_only=False, simulated_slot_counts=None, slot_limits=SLOT_LIMITS):
         engine, slot = slot
         slot = slot + (extra_info,)
         first_possible = len(body) if first_possible is None else first_possible
@@ -602,11 +619,11 @@ class KernelBuilder:
             else:
                 instr = body[i]
             
-            if self._get_n_slots(body, i, engine, simulated_slot_counts) < SLOT_LIMITS[engine]:
+            if self._get_n_slots(body, i, engine, simulated_slot_counts) < slot_limits[engine]:
                 if slot[0] == "jump_indirect":
-                    next_slot_is_eligible_for_load_2x = self._get_n_slots(body,i+1,"alu",simulated_slot_counts) + 2 <= SLOT_LIMITS["alu"]
-                    this_slot_is_eligible_for_mod = self._get_n_slots(body,i,"alu", simulated_slot_counts) + 1 <= SLOT_LIMITS["alu"]
-                    next_slot_is_eligible_for_jump = self._get_n_slots(body, i+1, "flow", simulated_slot_counts) + 1 <= SLOT_LIMITS["flow"]
+                    next_slot_is_eligible_for_load_2x = self._get_n_slots(body,i+1,"alu",simulated_slot_counts) + 2 <= slot_limits["alu"]
+                    this_slot_is_eligible_for_mod = self._get_n_slots(body,i,"alu", simulated_slot_counts) + 1 <= slot_limits["alu"]
+                    next_slot_is_eligible_for_jump = self._get_n_slots(body, i+1, "flow", simulated_slot_counts) + 1 <= slot_limits["flow"]
                     if next_slot_is_eligible_for_jump and next_slot_is_eligible_for_load_2x and this_slot_is_eligible_for_mod:
 
                         if simulate_only:
@@ -647,7 +664,7 @@ class KernelBuilder:
 
                 # shift whole slot into alu engine
                 current_n_slots_alu = self._get_n_slots(body, i, "alu", simulated_slot_counts)
-                if current_n_slots_alu + VLEN <= SLOT_LIMITS["alu"]:
+                if current_n_slots_alu + VLEN <= slot_limits["alu"]:
                     if simulate_only:
                         simulated_slot_counts[i][engine] += VLEN
                         return i+1
@@ -656,9 +673,9 @@ class KernelBuilder:
                     instr["alu"].extend(slots)
                     return i + 1
                 
-                next_slot_is_eligible = self._get_n_slots(body, i+1, "alu", simulated_slot_counts) + VLEN // 2 <= SLOT_LIMITS["alu"]
+                next_slot_is_eligible = self._get_n_slots(body, i+1, "alu", simulated_slot_counts) + VLEN // 2 <= slot_limits["alu"]
                 # shift slot half into current instruction, half into next
-                if current_n_slots_alu + VLEN // 2 <= SLOT_LIMITS["alu"] and next_slot_is_eligible:
+                if current_n_slots_alu + VLEN // 2 <= slot_limits["alu"] and next_slot_is_eligible:
                     
                     slots = KernelBuilder.valu_slot_to_alu_slot(slot)
                     slots_first = slots[:VLEN // 2]
@@ -991,7 +1008,7 @@ class KernelBuilder:
                 if round == 0:
                     if ci > 0:
                         slots = ("+", inp_val_offsets + i // VLEN, inp_val_offsets + i // VLEN, chunk_incr)
-                        after_init_offsets_instrs[i // VLEN] = self.interleave_engine_fns(body, ("alu", slots), max(after_init_offsets_instrs[i // VLEN]))
+                        after_init_offsets_instrs[i // VLEN] = self.interleave_engine_fns(body, ("alu", slots), after_init_offsets_instrs[i // VLEN])
 
                     slots = ("vload", inp_values.addr() + i, inp_val_offsets + i // VLEN)
                     res = self.interleave_engine_fns(body, ("load", slots), max(inp_values.get_next_write(i, by_vlen=True), after_init_offsets_instrs[i // VLEN]))
@@ -1069,17 +1086,17 @@ class KernelBuilder:
                     return
                 # if at depth 1, special formula
                 elif (round + 1) % (forest_height + 1) == 1:
-                    res = self.build_idx_one_alu(body, i, inp_indices, inp_values, tmp1_parallel, forest_consts_vlen[1], consts_vlen[2], after_first_vlen_consts_init)
+                    res = self.build_idx_one_valu(body, i, inp_indices, inp_values, tmp1_parallel, forest_consts_vlen[1], consts_vlen[2], after_first_vlen_consts_init)
                     # if (i // 8) % 7 >= 6:
                     #     res = self.build_idx_one_alu(body, i, inp_indices, inp_values, tmp1_parallel, forest_consts_vlen[1], consts_vlen[2], after_first_vlen_consts_init)
                     # else:
                     #     res = self.build_idx_one_valu(body, i, inp_indices, inp_values, tmp1_parallel, forest_consts_vlen[1], consts_vlen[2], after_first_vlen_consts_init)
                 # idx = 2*idx + (1 if val % 2 == 0 else 2)
                 else:
-                    if (i // 8) % 7 >= 5:
-                        res = self.build_idx_next_alu(body, i, inp_indices, inp_values, tmp1_parallel, forest_const_m1_vlen, after_forest_m1_vlen_instr, consts_vlen[2], after_first_vlen_consts_init)
-                    else:
-                        res = self.build_idx_next_valu(body, i, inp_indices, inp_values, tmp1_parallel, forest_const_m1_vlen, after_forest_m1_vlen_instr, consts_vlen[2], after_first_vlen_consts_init)
+                    # if (i // 8) % 7 >= 5:
+                    #     res = self.build_idx_next_alu(body, i, inp_indices, inp_values, tmp1_parallel, forest_const_m1_vlen, after_forest_m1_vlen_instr, consts_vlen[2], after_first_vlen_consts_init)
+                    # else:
+                    res = self.build_idx_next_valu(body, i, inp_indices, inp_values, tmp1_parallel, forest_const_m1_vlen, after_forest_m1_vlen_instr, consts_vlen[2], after_first_vlen_consts_init)
                     # # print("wrap res: ", res)
 
                 for j in range(i,i+VLEN):
