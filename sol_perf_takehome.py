@@ -541,6 +541,47 @@ class KernelBuilder:
 
         return slot_count
 
+    def interleave_valu_opt(self, body, slot, i, reads : list[ScratchObjectWrapper], writes : list[ScratchObjectWrapper], extra_info={}, simulate_only=False, simulate_slot_counts=None):
+        simulate_counts_valu = defaultdict(lambda: defaultdict(int)) if simulate_slot_counts is None else copy.deepcopy(simulate_slot_counts)
+        engine, (op, dst, a1, a2) = slot
+
+        assert engine == "valu", "optimized valu interleaving only supports valu"
+        assert op not in ("vbroadcast", "multiply_add"), "optimized valu interleaving requires valu op must have a corresponding valu"
+
+        # sim valu path
+        first_possible = max([r.get_next_read(i, by_vlen=True) for r in reads] + [w.get_next_write(i, by_vlen=True) for w in writes])
+        next_instr_valu = self.interleave_engine_fns(body, slot, first_possible, extra_info, should_pack_valu=False, jump_load_data={}, simulate_only=True, simulated_slot_counts=simulate_counts_valu)
+
+        # sim alu path
+        max_next_instr_alu = 0
+        for j in range(0,VLEN):
+            slot = ("alu", (op, dst+j, a1+j, a2+j))
+            first_possible = max([r.get_next_read(i+j) for r in reads] + [w.get_next_write(i+j) for w in writes])
+            next_instr_alu = self.interleave_engine_fns(body, slot, first_possible, extra_info, should_pack_valu=False, jump_load_data={}, simulate_only=True, simulated_slot_counts=simulate_slot_counts)
+            max_next_instr_alu = max(max_next_instr_alu, next_instr_alu)
+
+        print(f"Comparing first alu {max_next_instr_alu} vs valu {next_instr_valu}")
+        if next_instr_valu < max_next_instr_alu:
+            next_instr = self.interleave_engine_fns(body, slot, first_possible, extra_info, should_pack_valu=False)
+            for r in reads:
+                r.update_last_read(next_instr, i, by_vlen=True)
+            for w in writes:
+                w.update_last_write(next_instr, i, by_vlen=True)
+
+            return next_instr
+        else:
+            for j in range(0,VLEN):
+                slot = ("alu", (op, dst+j, a1+j, a2+j))
+                first_possible = max([r.get_next_read(i+j) for r in reads] + [w.get_next_write(i+j) for w in writes])
+                next_instr_alu = self.interleave_engine_fns(body, slot, first_possible, extra_info, should_pack_valu=False)
+                for r in reads:
+                    r.update_last_read(next_instr_alu, i+j)
+                for w in writes:
+                    w.update_last_write(next_instr_alu, i+j)
+
+            return max_next_instr_alu
+
+
     def interleave_engine_fns(self, body, slot, first_possible=None, extra_info={}, should_pack_valu=True, jump_load_data={}, simulate_only=False, simulated_slot_counts=None):
         engine, slot = slot
         slot = slot + (extra_info,)
@@ -1039,6 +1080,7 @@ class KernelBuilder:
 
             # go through first 3 rounds vector by vector, then process the chunk in parallel
             # schedule = [(range(0,3), "vector"), (range(3,10), "chunk"), (range(10,13), "vector"), (range(13,16), "chunk")]
+            # schedule = [(range(0,3), "vector"), (range(3,16), "chunk")]
             switch_point = 14
             schedule = [(range(0,switch_point), "vector"), (range(switch_point,16), "chunk")]
             for round_range, process_algo in schedule:
