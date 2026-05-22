@@ -235,8 +235,25 @@ class KernelBuilder:
         scratch_inp_idx.update_last_write(res - 1, i, by_vlen=True)
 
         return res
+    
+    def build_idx_one_alu(self, body, i, scratch_inp_idx : ScratchObjectWrapper, scratch_inp_val : ScratchObjectWrapper, tmp1_parallel : ScratchObjectWrapper, forest_const_p1_vlen, two_const_vlen, after_first_vlen_consts_init):
 
-    def build_idx_one(self, body, i, scratch_inp_idx : ScratchObjectWrapper, scratch_inp_val : ScratchObjectWrapper, tmp1_parallel : ScratchObjectWrapper, forest_const_p1_vlen, two_const_vlen, after_first_vlen_consts_init):
+        for j in range(i,i+VLEN):
+            # tmp1 = val % 2
+            slots = ("%", tmp1_parallel.addr() + j, scratch_inp_val.addr() + j, two_const_vlen)
+            res = self.interleave_engine_fns(body, ("alu", slots), max(tmp1_parallel.get_next_write(j), scratch_inp_val.get_next_read(j), after_first_vlen_consts_init))
+            tmp1_parallel.update_last_write(res - 1, j)
+            scratch_inp_val.update_last_read(res - 1, j)
+
+            # idx = tmp1 + 1
+            slots = ("+", scratch_inp_idx.addr() + j, tmp1_parallel.addr() + j, forest_const_p1_vlen)
+            res = self.interleave_engine_fns(body, ("alu", slots), max(scratch_inp_idx.get_next_write(j), tmp1_parallel.get_next_read(j), after_first_vlen_consts_init))
+            scratch_inp_idx.update_last_write(res - 1, j)
+            tmp1_parallel.update_last_read(res - 1, j)
+
+        return res  
+
+    def build_idx_one_valu(self, body, i, scratch_inp_idx : ScratchObjectWrapper, scratch_inp_val : ScratchObjectWrapper, tmp1_parallel : ScratchObjectWrapper, forest_const_p1_vlen, two_const_vlen, after_first_vlen_consts_init):
 
         # tmp1 = val % 2
         slots = ("%", tmp1_parallel.addr() + i, scratch_inp_val.addr() + i, two_const_vlen)
@@ -1004,14 +1021,18 @@ class KernelBuilder:
                     return
                 # if at depth 1, special formula
                 elif (round + 1) % (forest_height + 1) == 1:
-                    res = self.build_idx_one(body, i, inp_indices, inp_values, tmp1_parallel, forest_consts_vlen[1], consts_vlen[2], after_first_vlen_consts_init)
+                    res = self.build_idx_one_alu(body, i, inp_indices, inp_values, tmp1_parallel, forest_consts_vlen[1], consts_vlen[2], after_first_vlen_consts_init)
+                    # if (i // 8) % 7 >= 6:
+                    #     res = self.build_idx_one_alu(body, i, inp_indices, inp_values, tmp1_parallel, forest_consts_vlen[1], consts_vlen[2], after_first_vlen_consts_init)
+                    # else:
+                    #     res = self.build_idx_one_valu(body, i, inp_indices, inp_values, tmp1_parallel, forest_consts_vlen[1], consts_vlen[2], after_first_vlen_consts_init)
                 # idx = 2*idx + (1 if val % 2 == 0 else 2)
                 else:
                     if (i // 8) % 7 >= 5:
                         res = self.build_idx_next_alu(body, i, inp_indices, inp_values, tmp1_parallel, forest_const_m1_vlen, after_forest_m1_vlen_instr, consts_vlen[2], after_first_vlen_consts_init)
                     else:
                         res = self.build_idx_next_valu(body, i, inp_indices, inp_values, tmp1_parallel, forest_const_m1_vlen, after_forest_m1_vlen_instr, consts_vlen[2], after_first_vlen_consts_init)
-                    # print("wrap res: ", res)
+                    # # print("wrap res: ", res)
 
                 for j in range(i,i+VLEN):
                     self.interleave_engine_fns(body,("debug", ("compare", inp_indices.addr() + j, (round, st + j, "wrapped_idx"))), inp_indices.get_next_read(j))            
