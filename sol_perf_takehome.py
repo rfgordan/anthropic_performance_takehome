@@ -819,8 +819,8 @@ class KernelBuilder:
         # kernel to let you debug at intermediate steps. The testing harness in this
         # file requires these match up to the reference kernel's yields, but the
         # submission harness ignores them.
-        # self.add("flow", ("pause",))
-        self.interleave_engine_fns(body, ("flow", ("pause",)), 0)
+        self.add("flow", ("pause",))
+        # self.interleave_engine_fns(body, ("flow", ("pause",)), 0)
         # Any debug engine instruction is ignored by the submission simulator
         self.interleave_engine_fns(body, ("debug", ("comment", "Starting loop")), 0)
         # self.add("debug", ("comment", "Starting loop"))
@@ -1021,12 +1021,15 @@ class KernelBuilder:
                     if depth > 0:
                         self.interleave_engine_fns(body, ("debug", ("compare", inp_indices.addr() + j, (round, st + j, "idx"))), inp_indices.get_next_read(j))
 
+                # at depth 0, deterministically apply the root node value
                 if depth == 0:
                     tree_val_zero_vlen = tree_val_zero_base_vlen if round == 0 else tree_vals_vlen[0]
                     res = self.build_apply_node_val_root(body, i, inp_values, tree_val_zero_vlen)
+                # for first *n_tree_preload_layers*, iterate over all possible nodes and apply using a mask
                 elif depth < n_tree_preload_layers:
                     self.build_apply_node_val_masked(body, i, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, forest_consts_vlen, after_load_tree_vals_instr, consts_vlen, after_vlen_consts_init, depth)
-                elif n_tree_preload_layers <= depth < n_tree_preload_layers + n_jump_layers_enabled and (i // 8) % 5 >= 4: # route_vector_load(i, round, depth, n_tree_preload_layers, n_jump_layers_enabled):
+                # for configurable fraction of vectors, apply jump loading
+                elif n_tree_preload_layers <= depth < n_tree_preload_layers + n_jump_layers_enabled and route_vector_load(i, round, depth, n_tree_preload_layers, n_jump_layers_enabled):
                     self.build_double_scratch_jump_load(body, i, tmp_jump1, jump_load_pointer, jump_load_pointer_alt, post_jump_load_offset, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, jump_layer_offsets_sq, consts[0], round, depth, st, n_tree_preload_layers, debug_info)
                 else:
                     can_apply_node_val_masked = depth < n_tree_preload_layers
@@ -1037,12 +1040,12 @@ class KernelBuilder:
                     first_idx = mem_res_instr_idx
                     routing_decision = LoadRouting.FROM_MEM_LOAD
 
-                    if n_tree_preload_layers <= depth < n_tree_preload_layers + n_jump_layers_enabled:
-                        simulated_counts_jump = defaultdict(lambda: defaultdict(int))
-                        jump_res_instr_idx = self.build_double_scratch_jump_load(body, i, tmp_jump1.dcopy(), jump_load_pointer.dcopy(), jump_load_pointer_alt.dcopy(), post_jump_load_offset.dcopy(), inp_indices.dcopy(), inp_values.dcopy(), node_vals.dcopy(), in_mem_node_vals, jump_layer_offsets, jump_layer_offsets_sq, consts[0], round, depth, st, n_tree_preload_layers, debug_info, simulate_only=True, simulated_slot_counts=simulated_counts_jump)
-                        if jump_res_instr_idx < first_idx:
-                            first_idx = jump_res_instr_idx
-                            routing_decision = LoadRouting.JUMP_LOAD_2X
+                    # if n_tree_preload_layers <= depth < n_tree_preload_layers + n_jump_layers_enabled:
+                    #     simulated_counts_jump = defaultdict(lambda: defaultdict(int))
+                    #     jump_res_instr_idx = self.build_double_scratch_jump_load(body, i, tmp_jump1.dcopy(), jump_load_pointer.dcopy(), jump_load_pointer_alt.dcopy(), post_jump_load_offset.dcopy(), inp_indices.dcopy(), inp_values.dcopy(), node_vals.dcopy(), in_mem_node_vals, jump_layer_offsets, jump_layer_offsets_sq, consts[0], round, depth, st, n_tree_preload_layers, debug_info, simulate_only=True, simulated_slot_counts=simulated_counts_jump)
+                    #     if jump_res_instr_idx < first_idx:
+                    #         first_idx = jump_res_instr_idx
+                    #         routing_decision = LoadRouting.JUMP_LOAD_2X
 
                     if can_apply_node_val_masked:
                         simulated_counts_mask = defaultdict(lambda: defaultdict(int))
@@ -1060,46 +1063,34 @@ class KernelBuilder:
                             self.build_apply_node_val_masked(body, i, inp_values, inp_indices, node_vals, tmp1_parallel, tree_vals_vlen, forest_consts_vlen, after_load_tree_vals_instr, consts_vlen, after_vlen_consts_init, depth)
                         case _:
                             raise NotImplementedError("WTF impossible routing decision")
-                        
+
+                # for in-scratch node values, we've pre-applied the last const xor from hash fn        
                 should_skip_final_xor = (round + 1) % (forest_height + 1) < n_tree_preload_layers + n_jump_layers_enabled
                 res = self.build_hash_opt(body, i, inp_values, tmp1_parallel, hash_consts_vlen, round, st, end, debug_info, should_skip_final_xor)
+                
                 for j in range(i,i+VLEN):
                     self.interleave_engine_fns(body,("debug", ("compare", inp_values.addr() + j, (round, st + j, "hashed_val"))), inp_values.get_next_read(j))
                 
+                # final round: use vstore operations to write the inputs back to memory, no idx update
                 if round == rounds - 1:
-                    # use vstore operations to write the inputs back to memory
                     slots = ("vstore", inp_val_offsets + (i // VLEN), inp_values.addr() + i)
                     res = self.interleave_engine_fns(body, ("store", slots), inp_values.get_next_read(i, by_vlen=True))
                     inp_values.update_last_read(res - 1, i, by_vlen=True)
-
-                    # no need for index update on last round
                     return
-
                 # if at full depth, set idx to 0
                 if (round + 1) % (forest_height + 1) == 0:
-                    # res = self.build_idx_wrap(body, i, inp_indices, end - st, forest_consts_vlen[0])
                     return
-                # if at depth 1, special formula
+                # if at depth 1, can use fewer ops
                 elif (round + 1) % (forest_height + 1) == 1:
                     res = self.build_idx_one_valu(body, i, inp_indices, inp_values, tmp1_parallel, forest_consts_vlen[1], consts_vlen[2], after_first_vlen_consts_init)
-                    # if (i // 8) % 7 >= 6:
-                    #     res = self.build_idx_one_alu(body, i, inp_indices, inp_values, tmp1_parallel, forest_consts_vlen[1], consts_vlen[2], after_first_vlen_consts_init)
-                    # else:
-                    #     res = self.build_idx_one_valu(body, i, inp_indices, inp_values, tmp1_parallel, forest_consts_vlen[1], consts_vlen[2], after_first_vlen_consts_init)
-                # idx = 2*idx + (1 if val % 2 == 0 else 2)
+                # default case: idx = 2*idx + (1 if val % 2 == 0 else 2)
                 else:
-                    # if (i // 8) % 7 >= 5:
-                    #     res = self.build_idx_next_alu(body, i, inp_indices, inp_values, tmp1_parallel, forest_const_m1_vlen, after_forest_m1_vlen_instr, consts_vlen[2], after_first_vlen_consts_init)
-                    # else:
                     res = self.build_idx_next_valu(body, i, inp_indices, inp_values, tmp1_parallel, forest_const_m1_vlen, after_forest_m1_vlen_instr, consts_vlen[2], after_first_vlen_consts_init)
-                    # # print("wrap res: ", res)
 
                 for j in range(i,i+VLEN):
                     self.interleave_engine_fns(body,("debug", ("compare", inp_indices.addr() + j, (round, st + j, "wrapped_idx"))), inp_indices.get_next_read(j))            
 
-            # go through first 3 rounds vector by vector, then process the chunk in parallel
-            # schedule = [(range(0,3), "vector"), (range(3,10), "chunk"), (range(10,13), "vector"), (range(13,16), "chunk")]
-            # schedule = [(range(0,3), "vector"), (range(3,16), "chunk")]
+            # go through first *switch_point* rounds vector by vector, then process the entire chunk in parallel
             switch_point = 14
             schedule = [(range(0,switch_point), "vector"), (range(switch_point,16), "chunk")]
             for round_range, process_algo in schedule:
@@ -1115,17 +1106,14 @@ class KernelBuilder:
 
         print("Total scratch used: ", self.scratch_ptr, "remaining: ", SCRATCH_SIZE - self.scratch_ptr)
         
-        # self.instrs.append({"flow": [("pause",)]})
+        # post-hoc, expand the jump-load blocks
         self.interleave_engine_fns(body, ("flow", ("pause",)), len(body))
-        # print(body)
         jump_block_start = self.expand_jump_load_instrs(body, consts[0])
-
         load_slots = [slot for slot in body[after_jump_load_setup - 1]["load"] if slot[1] != jump_load_pointer.addr()]
         load_slots.append(("const", jump_load_pointer.addr(), jump_block_start))
         body[after_jump_load_setup - 1]["load"] = load_slots
 
         self.instrs.extend(body)
-        # self.print_instructions()
         # Required to match with the yield in reference_kernel2
 
     def print_instructions(self):
