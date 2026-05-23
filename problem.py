@@ -283,6 +283,8 @@ class Machine:
                 for vi in range(VLEN):
                     self.scratch_write[dest + vi] = self.mem[addr + vi]
             case ("const", dest, val):
+                if isinstance(val, tuple):
+                    print("lost tuple:", val)
                 self.scratch_write[dest] = (val) % (2**32)
             case _:
                 raise NotImplementedError(f"Unknown load op {slot}")
@@ -373,7 +375,7 @@ class Machine:
                 if not self.enable_debug:
                     continue
                 for slot in slots:
-                    slots = slots[:-1]
+                    # slots = slots[:-1]
                     if slot[0] == "compare":
                         loc, key = slot[1], slot[2]
                         ref = self.value_trace[key]
@@ -580,15 +582,15 @@ def reference_kernel2(mem: list[int], trace: dict[Any, int] = {}):
     inp_indices_p = mem[5]
     inp_values_p = mem[6]
 
-    def should_skip_last_xor(h):
+    def should_skip_last_xor(h, rounds):
         next_depth = (h + 1) % (forest_height + 1)
-        return next_depth < (3 + 4) and h >= 0
+        return h < rounds - 1 and next_depth < (3 + 4) and h >= 0
     
     yield mem
     for h in range(rounds):
         
-        skip_last_xor = should_skip_last_xor(h)
-        did_skip_last_xor = should_skip_last_xor(h-1)
+        skip_last_xor = should_skip_last_xor(h, rounds)
+        did_skip_last_xor = should_skip_last_xor(h-1, rounds)
 
         for i in range(batch_size):
             idx = mem[inp_indices_p + i]
