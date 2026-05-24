@@ -212,6 +212,7 @@ class Machine:
                 core.pc += 1
                 if instr is None:
                     print("None instruction: ", core.pc)
+                    print("Surrounding instructions:", self.program[core.pc - 5:core.pc + 5])
                 self.step(instr, core)
                 if any(name != "debug" for name in instr.keys()):
                     has_non_debug = True

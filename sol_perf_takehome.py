@@ -790,7 +790,7 @@ class KernelBuilder:
         n_jump_offsets = n_jump_nodes_enabled // VLEN
         n_val_offsets = parallel_vals // VLEN
         n_tree_preload_layers = min(n_tree_preload_layers, forest_height + 1) # can't preload more layers than the tree has
-        last_non_jump_instr = 0 # hard code end of normal instructions, to know where to index for jump blocks
+        dummy_jump_instr = 0 # stand-in end of normal instructions, to know where to index for jump blocks
 
         # MAIN SCRATCH DATA
         node_vals = self.create_wrapped_scratch_data("node_vals", length=parallel_vals)
@@ -949,7 +949,7 @@ class KernelBuilder:
             slot = ("*", jump_layer_offsets_sq + i, jump_layer_offsets + i, jump_layer_offsets + i)
             after_jump_layer_load[i] = self.interleave_engine_fns(body, ("alu", slot), after_jump_layer_load[i])
 
-        slot = ("const", jump_load_pointer.addr(), last_non_jump_instr)
+        slot = ("const", jump_load_pointer.addr(), dummy_jump_instr)
         after_jump_load_setup = self.interleave_engine_fns(body, ("load", slot), 0)
         jump_load_pointer.update_last_write(after_jump_load_setup-1)
 
