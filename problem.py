@@ -589,8 +589,9 @@ def reference_kernel2(mem: list[int], trace: dict[Any, int] = {}):
     yield mem
     for h in range(rounds):
         
-        skip_last_xor = should_skip_last_xor(h, rounds)
+        skip_last_xor = should_skip_last_xor(h, rounds) 
         did_skip_last_xor = should_skip_last_xor(h-1, rounds)
+        print(f"Round h:{h}, skip xor: {skip_last_xor}, apply lastxor: {did_skip_last_xor}")
 
         for i in range(batch_size):
             idx = mem[inp_indices_p + i]
@@ -603,7 +604,11 @@ def reference_kernel2(mem: list[int], trace: dict[Any, int] = {}):
             trace[(h, i, "node_val")] = node_val
             val = myhash_traced(val ^ node_val, trace, h, i, skip_last_xor)
             trace[(h, i, "hashed_val")] = val
-            idx = 2 * idx + (1 if val % 2 == 0 else 2)
+            # reverse the outcome
+            if skip_last_xor:
+                idx = 2 * idx + (1 if (val ^ HASH_STAGES[-1][1]) % 2 == 0 else 2)
+            else:
+                idx = 2 * idx + (1 if val % 2 == 0 else 2)
             # trace[(h, i, "next_idx")] = idx
             idx = 0 if idx >= n_nodes else idx
             trace[(h, i, "wrapped_idx")] = idx + forest_values_p

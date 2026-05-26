@@ -1192,6 +1192,25 @@ class Tests(unittest.TestCase):
             for _ in reference_kernel2(mem, {}):
                 pass
             # assert inp.indices == mem[mem[5] : mem[5] + len(inp.indices)]
+            print(inp.values)
+            print(mem[mem[6] : mem[6] + len(inp.values)])
+            assert inp.values == mem[mem[6] : mem[6] + len(inp.values)]
+
+    def test_ref_kernels_h10(self):
+        """
+        Test the reference kernels against each other
+        """
+        random.seed(123)
+        for i in range(10):
+            f = Tree.generate(10)
+            inp = Input.generate(f, 16, 256)
+            mem = build_mem_image(f, inp)
+            reference_kernel(f, inp)
+            for _ in reference_kernel2(mem, {}):
+                pass
+            # assert inp.indices == mem[mem[5] : mem[5] + len(inp.indices)]
+            print(inp.values)
+            print(mem[mem[6] : mem[6] + len(inp.values)])
             assert inp.values == mem[mem[6] : mem[6] + len(inp.values)]
 
     def test_kernel_trace(self):
