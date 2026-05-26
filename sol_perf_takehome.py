@@ -535,9 +535,9 @@ class KernelBuilder:
             slot = ("vbroadcast", tree_val_vlen, tree_val_vlen)
             next_instr_idxs[i] = self.interleave_engine_fns(body, ("valu", slot), next_instr_idxs[i])
 
-        for i, tree_val_vlen in enumerate(tree_vals_vlen):
-            slot = ("^", tree_val_vlen, tree_val_vlen, last_hash_const_vlen1)
-            next_instr_idxs[i] = self.interleave_engine_fns(body, ("valu", slot), max(next_instr_idxs[i], after_hash_const_idx))
+        # for i, tree_val_vlen in enumerate(tree_vals_vlen):
+        #     slot = ("^", tree_val_vlen, tree_val_vlen, last_hash_const_vlen1)
+        #     next_instr_idxs[i] = self.interleave_engine_fns(body, ("valu", slot), max(next_instr_idxs[i], after_hash_const_idx))
 
         return max(max(next_instr_idxs), next_instr_zero_base)
     
@@ -976,9 +976,9 @@ class KernelBuilder:
             after_init_jump_offsets[i] = self.interleave_engine_fns(body, ("load", slot), after_init_jump_offsets[i])
             in_mem_node_vals.update_last_write(after_init_jump_offsets[i] - 1, i * VLEN, by_vlen=True)
 
-            slot = ("^", in_mem_node_vals.addr() + i * VLEN, in_mem_node_vals.addr() + i * VLEN, hash_consts_vlen[-1][0])
-            after_init_jump_offsets[i] = self.interleave_engine_fns(body, ("valu", slot), max(after_init_jump_offsets[i], after_hash_consts_idx[-1][0]))
-            in_mem_node_vals.update_last_read_write(after_init_jump_offsets[i] - 1, i * VLEN, by_vlen=True)
+            # slot = ("^", in_mem_node_vals.addr() + i * VLEN, in_mem_node_vals.addr() + i * VLEN, hash_consts_vlen[-1][0])
+            # after_init_jump_offsets[i] = self.interleave_engine_fns(body, ("valu", slot), max(after_init_jump_offsets[i], after_hash_consts_idx[-1][0]))
+            # in_mem_node_vals.update_last_read_write(after_init_jump_offsets[i] - 1, i * VLEN, by_vlen=True)
 
 
         # parallel path: take parallel_vals chunks of batch size and process
@@ -1024,7 +1024,8 @@ class KernelBuilder:
 
                 # at depth 0, deterministically apply the root node value
                 if depth == 0:
-                    tree_val_zero_vlen = tree_val_zero_base_vlen if round == 0 else tree_vals_vlen[0]
+                    # tree_val_zero_vlen = tree_val_zero_base_vlen if round == 0 else tree_vals_vlen[0]
+                    tree_val_zero_vlen = tree_vals_vlen[0]
                     res = self.build_apply_node_val_root(body, i, inp_values, tree_val_zero_vlen)
                 # for first *n_tree_preload_layers*, iterate over all possible nodes and apply using a mask
                 elif depth < n_tree_preload_layers:
@@ -1034,7 +1035,8 @@ class KernelBuilder:
                     self.build_double_scratch_jump_load(body, i, tmp_jump1, jump_load_pointer, jump_load_pointer_alt, post_jump_load_offset, inp_indices, inp_values, node_vals, in_mem_node_vals, jump_layer_offsets, jump_layer_offsets_sq, consts[0], round, depth, st, n_tree_preload_layers, debug_info)
                 else:
                     can_apply_node_val_masked = depth < n_tree_preload_layers
-                    did_skip_final_xor = depth < n_tree_preload_layers + n_jump_layers_enabled and round > 0
+                    # did_skip_final_xor = depth < n_tree_preload_layers + n_jump_layers_enabled and round > 0
+                    did_skip_final_xor = False
 
                     simulated_counts_mem = defaultdict(lambda: defaultdict(int))
                     mem_res_instr_idx = self.build_apply_node_val_mem(body, i, inp_indices.dcopy(), inp_values.dcopy(), node_vals.dcopy(), hash_consts_vlen[-1][0], after_hash_consts_idx[-1][0], round, st, debug_info, did_skip_final_xor=did_skip_final_xor, simulate_only=True, simulated_slot_counts=simulated_counts_mem)
@@ -1066,7 +1068,8 @@ class KernelBuilder:
                             raise NotImplementedError("WTF impossible routing decision")
 
                 # for in-scratch node values, we've pre-applied the last const xor from hash fn        
-                should_skip_final_xor = round < rounds - 1 and (round + 1) % (forest_height + 1) < n_tree_preload_layers + n_jump_layers_enabled
+                # should_skip_final_xor = round < rounds - 1 and (round + 1) % (forest_height + 1) < n_tree_preload_layers + n_jump_layers_enabled
+                should_skip_final_xor = False
                 res = self.build_hash_opt(body, i, inp_values, tmp1_parallel, hash_consts_vlen, round, st, end, debug_info, should_skip_final_xor)
                 
                 for j in range(i,i+VLEN):
