@@ -40,6 +40,7 @@ def do_kernel_test(forest_height: int, rounds: int, batch_size: int):
     machine = Machine(mem, kb.instrs, kb.debug_info(), n_cores=N_CORES)
     machine.enable_pause = False
     machine.enable_debug = False
+    machine.prints = True
     machine.run()
 
     for ref_mem in reference_kernel2(mem):

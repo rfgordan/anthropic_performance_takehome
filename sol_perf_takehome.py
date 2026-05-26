@@ -1111,8 +1111,7 @@ class KernelBuilder:
         self.interleave_engine_fns(body, ("flow", ("pause",)), len(body))
         
         # for the submission harness, need to jump to the end of the program        
-        self.interleave_engine_fns(body, ("load", ("const", consts[2**32-1], 2**32-1)), 0)
-        self.interleave_engine_fns(body, ("flow", ("jump", consts[2**32-1])), len(body))
+        self.interleave_engine_fns(body, ("flow", ("jump", 2**32-1)), len(body))
 
         jump_block_start = self.expand_jump_load_instrs(body, consts[0])
         load_slots = [slot for slot in body[after_jump_load_setup - 1]["load"] if slot[1] != jump_load_pointer.addr()]
