@@ -551,7 +551,7 @@ class KernelBuilder:
         
         # print("Full jumpy block instrs: ", jump_block_instrs)
         main_instr_len = len(body)
-        print(f"Instruction length without jump block:{main_instr_len}, Number of jumps: {num_prev_jump_expands}, Jump block len: {len(jump_block_instrs)}")
+        # print(f"Instruction length without jump block:{main_instr_len}, Number of jumps: {num_prev_jump_expands}, Jump block len: {len(jump_block_instrs)}")
         body.extend(jump_block_instrs)
         return main_instr_len
 
@@ -570,7 +570,7 @@ class KernelBuilder:
         n_jump_layers_enabled = 4
         jump_load_every_n = 5
         parallel_vals = 256
-        print("n_jump_layers_enabled: ", n_jump_layers_enabled)
+        # print("n_jump_layers_enabled: ", n_jump_layers_enabled)
 
         # DERIVED CONSTANTS
         n_tree_preload_vecs = 2**n_tree_preload_layers - 1

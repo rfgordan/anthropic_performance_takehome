@@ -1,36 +1,10 @@
-# My Solution: Anthropic's Original Performance Take-Home
+# Anthropic's Original Performance Take-Home
 
-My solution scores 1221 cycles on the test case.
+This repo contains a version of Anthropic's original performance take-home, before Claude Opus 4.5 started doing better than humans given only 2 hours.
 
-For more details on my solution, see the writeup below.
+The original take-home was a 4-hour one that starts close to the contents of this repo, after Claude Opus 4 beat most humans at that, it was updated to a 2-hour one which started with code which achieved 18532 cycles (7.97x faster than this repo starts you). This repo is based on the newer take-home which has a few more instructions and comes with better debugging tools, but has the starter code reverted to the slowest baseline. After Claude Opus 4.5 we started using a different base for our time-limited take-homes.
 
-```
-(anthropic_performance_takehome) robertgordan@Roberts-MacBook-Air ~/P/anthropic_performance_takehome (main)> python tests/submission_tests.py
-Testing forest_height=10, rounds=16, batch_size=256
-CYCLES:  1221
-Testing forest_height=10, rounds=16, batch_size=256
-CYCLES:  1221
-Testing forest_height=10, rounds=16, batch_size=256
-CYCLES:  1221
-Testing forest_height=10, rounds=16, batch_size=256
-CYCLES:  1221
-Testing forest_height=10, rounds=16, batch_size=256
-CYCLES:  1221
-Testing forest_height=10, rounds=16, batch_size=256
-CYCLES:  1221
-Testing forest_height=10, rounds=16, batch_size=256
-CYCLES:  1221
-Testing forest_height=10, rounds=16, batch_size=256
-CYCLES:  1221
-.Testing forest_height=10, rounds=16, batch_size=256
-CYCLES:  1221
-Speedup over baseline:  120.994266994267
-........
-----------------------------------------------------------------------
-Ran 9 tests in 0.590s
-
-OK
-```
+Now you can try to beat Claude Opus 4.5 given unlimited time!
 
 ## Performance benchmarks 
 
