@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 540" font-family="Helvetica,Arial,sans-serif">
+<rect x="1" y="1" width="938" height="538" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+<defs><marker id="ah" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#94a3b8"/></marker></defs>
+<text x="40" y="48" font-size="25" font-weight="700" fill="#0f172a">Masked Loading <tspan font-size="15" font-weight="400" fill="#64748b">(tree depths 1–2)</tspan></text>
+<text x="40" y="76" font-size="14" fill="#475569">Instead of a per-lane memory gather, select each lane’s node value with an equality mask and a multiply–add.</text>
+<text x="40" y="118" font-size="13" font-weight="600" fill="#0f172a">Preload the few candidate nodes that can occur at this depth <tspan font-weight="400" fill="#64748b">(only 2ᵈ of them):</tspan></text>
+<rect x="60" y="132" width="150" height="48" rx="10" fill="#f8fafc" stroke="#e2e8f0"/>
+<circle cx="90" cy="156" r="17" fill="#fef9c3" stroke="#facc15"/>
+<text x="90" y="161" font-size="14" font-weight="700" text-anchor="middle" fill="#854d0e">1</text>
+<text x="118" y="161" font-size="14" fill="#334155">→ <tspan font-weight="700" font-family="Menlo,monospace" fill="#1d4ed8">v₁</tspan></text>
+<rect x="240" y="132" width="150" height="48" rx="10" fill="#f8fafc" stroke="#e2e8f0"/>
+<circle cx="270" cy="156" r="17" fill="#fef9c3" stroke="#facc15"/>
+<text x="270" y="161" font-size="14" font-weight="700" text-anchor="middle" fill="#854d0e">2</text>
+<text x="298" y="161" font-size="14" fill="#334155">→ <tspan font-weight="700" font-family="Menlo,monospace" fill="#1d4ed8">v₂</tspan></text>
+<rect x="243" y="192" width="130" height="250" rx="10" fill="#fafafa" stroke="#eef2f7"/>
+<rect x="403" y="192" width="130" height="250" rx="10" fill="#fafafa" stroke="#eef2f7"/>
+<rect x="563" y="192" width="74" height="250" rx="10" fill="#f0f7ff" stroke="#e0ecfb"/>
+<text x="95.0" y="216" font-size="13" font-weight="600" text-anchor="middle" fill="#0f172a">lane</text>
+<text x="95.0" y="234" font-size="13" font-weight="400" text-anchor="middle" fill="#64748b">index</text>
+<text x="308" y="210" font-size="13" font-weight="600" text-anchor="middle" fill="#0f172a">candidate node 1</text>
+<text x="280.0" y="234" font-size="13" font-weight="400" text-anchor="middle" fill="#64748b">== 1</text>
+<text x="336.0" y="234" font-size="13" font-weight="400" text-anchor="middle" fill="#64748b">× v₁</text>
+<text x="468" y="210" font-size="13" font-weight="600" text-anchor="middle" fill="#0f172a">candidate node 2</text>
+<text x="440.0" y="234" font-size="13" font-weight="400" text-anchor="middle" fill="#64748b">== 2</text>
+<text x="496.0" y="234" font-size="13" font-weight="400" text-anchor="middle" fill="#64748b">× v₂</text>
+<text x="600" y="210" font-size="13" font-weight="600" text-anchor="middle" fill="#0f172a">node</text>
+<text x="600" y="234" font-size="13" font-weight="400" text-anchor="middle" fill="#64748b">value</text>
+<line x1="128" y1="340" x2="239" y2="340" stroke="#cbd5e1" stroke-width="1.5" marker-end="url(#ah)"/>
+<text x="388" y="346.0" font-size="26" font-weight="700" text-anchor="middle" fill="#64748b">+</text>
+<text x="548" y="346.0" font-size="26" font-weight="700" text-anchor="middle" fill="#64748b">=</text>
+<rect x="70" y="252" width="50" height="26" rx="6" fill="#fef9c3" stroke="#facc15"/>
+<text x="95" y="269" font-size="14" font-weight="600" text-anchor="middle" fill="#854d0e" font-family="Helvetica,Arial,sans-serif">2</text>
+<rect x="255" y="252" width="50" height="26" rx="6" fill="#f1f5f9" stroke="#e2e8f0"/>
+<text x="280" y="269" font-size="14" font-weight="600" text-anchor="middle" fill="#94a3b8" font-family="Helvetica,Arial,sans-serif">0</text>
+<rect x="311" y="252" width="50" height="26" rx="6" fill="#f1f5f9" stroke="#e2e8f0"/>
+<text x="336" y="269" font-size="14" font-weight="600" text-anchor="middle" fill="#94a3b8" font-family="Menlo,Consolas,monospace">0</text>
+<rect x="415" y="252" width="50" height="26" rx="6" fill="#dcfce7" stroke="#22c55e"/>
+<text x="440" y="269" font-size="14" font-weight="600" text-anchor="middle" fill="#15803d" font-family="Helvetica,Arial,sans-serif">1</text>
+<rect x="471" y="252" width="50" height="26" rx="6" fill="#dcfce7" stroke="#22c55e"/>
+<text x="496" y="269" font-size="14" font-weight="600" text-anchor="middle" fill="#15803d" font-family="Menlo,Consolas,monospace">v₂</text>
+<rect x="575" y="252" width="50" height="26" rx="6" fill="#dbeafe" stroke="#3b82f6"/>
+<text x="600" y="269" font-size="14" font-weight="600" text-anchor="middle" fill="#1d4ed8" font-family="Menlo,Consolas,monospace">v₂</text>
+<rect x="70" y="282" width="50" height="26" rx="6" fill="#fef9c3" stroke="#facc15"/>
+<text x="95" y="299" font-size="14" font-weight="600" text-anchor="middle" fill="#854d0e" font-family="Helvetica,Arial,sans-serif">1</text>
+<rect x="255" y="282" width="50" height="26" rx="6" fill="#dcfce7" stroke="#22c55e"/>
+<text x="280" y="299" font-size="14" font-weight="600" text-anchor="middle" fill="#15803d" font-family="Helvetica,Arial,sans-serif">1</text>
+<rect x="311" y="282" width="50" height="26" rx="6" fill="#dcfce7" stroke="#22c55e"/>
+<text x="336" y="299" font-size="14" font-weight="600" text-anchor="middle" fill="#15803d" font-family="Menlo,Consolas,monospace">v₁</text>
+<rect x="415" y="282" width="50" height="26" rx="6" fill="#f1f5f9" stroke="#e2e8f0"/>
+<text x="440" y="299" font-size="14" font-weight="600" text-anchor="middle" fill="#94a3b8" font-family="Helvetica,Arial,sans-serif">0</text>
+<rect x="471" y="282" width="50" height="26" rx="6" fill="#f1f5f9" stroke="#e2e8f0"/>
+<text x="496" y="299" font-size="14" font-weight="600" text-anchor="middle" fill="#94a3b8" font-family="Menlo,Consolas,monospace">0</text>
+<rect x="575" y="282" width="50" height="26" rx="6" fill="#dbeafe" stroke="#3b82f6"/>
+<text x="600" y="299" font-size="14" font-weight="600" text-anchor="middle" fill="#1d4ed8" font-family="Menlo,Consolas,monospace">v₁</text>
+<rect x="70" y="312" width="50" height="26" rx="6" fill="#fef9c3" stroke="#facc15"/>
+<text x="95" y="329" font-size="14" font-weight="600" text-anchor="middle" fill="#854d0e" font-family="Helvetica,Arial,sans-serif">1</text>
+<rect x="255" y="312" width="50" height="26" rx="6" fill="#dcfce7" stroke="#22c55e"/>
+<text x="280" y="329" font-size="14" font-weight="600" text-anchor="middle" fill="#15803d" font-family="Helvetica,Arial,sans-serif">1</text>
+<rect x="311" y="312" width="50" height="26" rx="6" fill="#dcfce7" stroke="#22c55e"/>
+<text x="336" y="329" font-size="14" font-weight="600" text-anchor="middle" fill="#15803d" font-family="Menlo,Consolas,monospace">v₁</text>
+<rect x="415" y="312" width="50" height="26" rx="6" fill="#f1f5f9" stroke="#e2e8f0"/>
+<text x="440" y="329" font-size="14" font-weight="600" text-anchor="middle" fill="#94a3b8" font-family="Helvetica,Arial,sans-serif">0</text>
+<rect x="471" y="312" width="50" height="26" rx="6" fill="#f1f5f9" stroke="#e2e8f0"/>
+<text x="496" y="329" font-size="14" font-weight="600" text-anchor="middle" fill="#94a3b8" font-family="Menlo,Consolas,monospace">0</text>
+<rect x="575" y="312" width="50" height="26" rx="6" fill="#dbeafe" stroke="#3b82f6"/>
+<text x="600" y="329" font-size="14" font-weight="600" text-anchor="middle" fill="#1d4ed8" font-family="Menlo,Consolas,monospace">v₁</text>
+<rect x="70" y="342" width="50" height="26" rx="6" fill="#fef9c3" stroke="#facc15"/>
+<text x="95" y="359" font-size="14" font-weight="600" text-anchor="middle" fill="#854d0e" font-family="Helvetica,Arial,sans-serif">2</text>
+<rect x="255" y="342" width="50" height="26" rx="6" fill="#f1f5f9" stroke="#e2e8f0"/>
+<text x="280" y="359" font-size="14" font-weight="600" text-anchor="middle" fill="#94a3b8" font-family="Helvetica,Arial,sans-serif">0</text>
+<rect x="311" y="342" width="50" height="26" rx="6" fill="#f1f5f9" stroke="#e2e8f0"/>
+<text x="336" y="359" font-size="14" font-weight="600" text-anchor="middle" fill="#94a3b8" font-family="Menlo,Consolas,monospace">0</text>
+<rect x="415" y="342" width="50" height="26" rx="6" fill="#dcfce7" stroke="#22c55e"/>
+<text x="440" y="359" font-size="14" font-weight="600" text-anchor="middle" fill="#15803d" font-family="Helvetica,Arial,sans-serif">1</text>
+<rect x="471" y="342" width="50" height="26" rx="6" fill="#dcfce7" stroke="#22c55e"/>
+<text x="496" y="359" font-size="14" font-weight="600" text-anchor="middle" fill="#15803d" font-family="Menlo,Consolas,monospace">v₂</text>
+<rect x="575" y="342" width="50" height="26" rx="6" fill="#dbeafe" stroke="#3b82f6"/>
+<text x="600" y="359" font-size="14" font-weight="600" text-anchor="middle" fill="#1d4ed8" font-family="Menlo,Consolas,monospace">v₂</text>
+<rect x="70" y="372" width="50" height="26" rx="6" fill="#fef9c3" stroke="#facc15"/>
+<text x="95" y="389" font-size="14" font-weight="600" text-anchor="middle" fill="#854d0e" font-family="Helvetica,Arial,sans-serif">1</text>
+<rect x="255" y="372" width="50" height="26" rx="6" fill="#dcfce7" stroke="#22c55e"/>
+<text x="280" y="389" font-size="14" font-weight="600" text-anchor="middle" fill="#15803d" font-family="Helvetica,Arial,sans-serif">1</text>
+<rect x="311" y="372" width="50" height="26" rx="6" fill="#dcfce7" stroke="#22c55e"/>
+<text x="336" y="389" font-size="14" font-weight="600" text-anchor="middle" fill="#15803d" font-family="Menlo,Consolas,monospace">v₁</text>
+<rect x="415" y="372" width="50" height="26" rx="6" fill="#f1f5f9" stroke="#e2e8f0"/>
+<text x="440" y="389" font-size="14" font-weight="600" text-anchor="middle" fill="#94a3b8" font-family="Helvetica,Arial,sans-serif">0</text>
+<rect x="471" y="372" width="50" height="26" rx="6" fill="#f1f5f9" stroke="#e2e8f0"/>
+<text x="496" y="389" font-size="14" font-weight="600" text-anchor="middle" fill="#94a3b8" font-family="Menlo,Consolas,monospace">0</text>
+<rect x="575" y="372" width="50" height="26" rx="6" fill="#dbeafe" stroke="#3b82f6"/>
+<text x="600" y="389" font-size="14" font-weight="600" text-anchor="middle" fill="#1d4ed8" font-family="Menlo,Consolas,monospace">v₁</text>
+<rect x="70" y="402" width="50" height="26" rx="6" fill="#fef9c3" stroke="#facc15"/>
+<text x="95" y="419" font-size="14" font-weight="600" text-anchor="middle" fill="#854d0e" font-family="Helvetica,Arial,sans-serif">2</text>
+<rect x="255" y="402" width="50" height="26" rx="6" fill="#f1f5f9" stroke="#e2e8f0"/>
+<text x="280" y="419" font-size="14" font-weight="600" text-anchor="middle" fill="#94a3b8" font-family="Helvetica,Arial,sans-serif">0</text>
+<rect x="311" y="402" width="50" height="26" rx="6" fill="#f1f5f9" stroke="#e2e8f0"/>
+<text x="336" y="419" font-size="14" font-weight="600" text-anchor="middle" fill="#94a3b8" font-family="Menlo,Consolas,monospace">0</text>
+<rect x="415" y="402" width="50" height="26" rx="6" fill="#dcfce7" stroke="#22c55e"/>
+<text x="440" y="419" font-size="14" font-weight="600" text-anchor="middle" fill="#15803d" font-family="Helvetica,Arial,sans-serif">1</text>
+<rect x="471" y="402" width="50" height="26" rx="6" fill="#dcfce7" stroke="#22c55e"/>
+<text x="496" y="419" font-size="14" font-weight="600" text-anchor="middle" fill="#15803d" font-family="Menlo,Consolas,monospace">v₂</text>
+<rect x="575" y="402" width="50" height="26" rx="6" fill="#dbeafe" stroke="#3b82f6"/>
+<text x="600" y="419" font-size="14" font-weight="600" text-anchor="middle" fill="#1d4ed8" font-family="Menlo,Consolas,monospace">v₂</text>
+<line x1="639" y1="340" x2="668" y2="340" stroke="#cbd5e1" stroke-width="1.5" marker-end="url(#ah)"/>
+<text x="676" y="338" font-size="14" font-weight="700" fill="#0f172a">⊕ XOR into</text>
+<text x="676" y="358" font-size="14" font-weight="700" fill="#0f172a">input values</text>
+<line x1="40" y1="448" x2="900" y2="448" stroke="#eef2f7"/>
+<text x="40" y="470" font-size="12.5" fill="#64748b">Each lane keeps only the value whose candidate index matches; all others contribute 0. Cost scales as 2ᵈ, so this wins only for the first few depths.</text>
+</svg>
